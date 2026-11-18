@@ -11,8 +11,10 @@ class ApiClient(context: Context) {
 
     suspend fun servers(): List<ServerInfo> = withContext(Dispatchers.IO) { engine.servers() }
     suspend fun versions(): List<String> = withContext(Dispatchers.IO) { engine.versions() }
-    suspend fun create(name: String, version: String, ramMb: Int): JSONObject =
-        withContext(Dispatchers.IO) { engine.create(name, version, ramMb) }
+    suspend fun create(name: String, version: String, ramMb: Int, world: WorldOptions): JSONObject =
+        withContext(Dispatchers.IO) { engine.create(name, version, ramMb, world) }
+    suspend fun configureWorld(id: String, world: WorldOptions) =
+        withContext(Dispatchers.IO) { engine.configureWorld(id, world) }
     suspend fun action(id: String, action: String) = withContext(Dispatchers.IO) { engine.action(id, action) }
     suspend fun acceptEula(id: String) = withContext(Dispatchers.IO) { engine.acceptEula(id) }
     suspend fun sendCommand(id: String, command: String) = withContext(Dispatchers.IO) { engine.sendCommand(id, command) }
@@ -39,7 +41,19 @@ data class ServerInfo(
     val ramMb: Int, val port: Int, val installed: Boolean, val installing: Boolean,
     val running: Boolean, val eulaAccepted: Boolean, val installError: String?,
     val installStep: String = "", val installProgress: Int = -1, val lanAddress: String? = null,
-    val ready: Boolean = false
+    val ready: Boolean = false,
+    val world: WorldOptions = WorldOptions(),
+    val worldGenerated: Boolean = false
+)
+
+data class WorldOptions(
+    val type: String = "minecraft:normal",
+    val seed: String = "",
+    val nether: Boolean = true,
+    val end: Boolean = true,
+    val structures: Boolean = true,
+    val maxPlayers: Int = 10,
+    val difficulty: String = "easy"
 )
 
 data class FileEntry(val name: String, val path: String, val isDirectory: Boolean, val size: Long)

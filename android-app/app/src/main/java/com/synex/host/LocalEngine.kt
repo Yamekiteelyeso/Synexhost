@@ -18,6 +18,7 @@ import java.util.zip.ZipOutputStream
 import java.net.URL
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.Properties
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 
@@ -43,6 +44,7 @@ internal class LocalEngine private constructor(private val ctx: Context) {
         @Volatile var installStep: String = ""
         @Volatile var installProgress: Int = -1
         @Volatile var ready = false
+        @Volatile var stopRequested = false
         fun step(message: String, percent: Int = -1) {
             installStep = message
             installProgress = percent
@@ -87,6 +89,9 @@ internal class LocalEngine private constructor(private val ctx: Context) {
             val def = JSONObject().put("id", "mi-boxpvp").put("name", "Mi BoxPvP")
                 .put("software", "Paper").put("version", "1.20.1")
                 .put("ramMb", 2048).put("port", 25565)
+                .put("worldType", "minecraft:normal").put("worldSeed", "")
+                .put("allowNether", true).put("allowEnd", true)
+                .put("structures", true).put("maxPlayers", 10).put("difficulty", "easy")
             specList.add(def)
             persist()
         }
@@ -126,6 +131,125 @@ internal class LocalEngine private constructor(private val ctx: Context) {
         choices.sortedBy { it.first }.firstOrNull()?.second
     }.getOrNull()
 
+    private fun worldOptions(s: JSONObject) = WorldOptions(
+        type = s.optString("worldType", "minecraft:normal"),
+        seed = s.optString("worldSeed", ""),
+        nether = s.optBoolean("allowNether", true),
+        end = s.optBoolean("allowEnd", true),
+        structures = s.optBoolean("structures", true),
+        maxPlayers = s.optInt("maxPlayers", 10),
+        difficulty = s.optString("difficulty", "easy")
+    )
+
+    private fun hasWorld(i: Instance): Boolean {
+        val levelName = File(i.dir, "server.properties").takeIf { it.isFile }
+            ?.readLines()?.firstOrNull { it.trim().startsWith("level-name=") }
+            ?.substringAfter('=')?.trim()?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,40}")) }
+            ?: "world"
+        return File(i.dir, "$levelName/level.dat").isFile
+    }
+
+    private fun validateWorld(world: WorldOptions) {
+        require(world.type in setOf("minecraft:normal", "minecraft:flat")) { "Tipo de mundo no válido" }
+        require(world.seed.matches(Regex("[a-zA-Z0-9_-]{0,64}"))) {
+            "La semilla debe tener hasta 64 caracteres, sin espacios ni símbolos"
+        }
+        require(world.maxPlayers in 1..100) { "Jugadores permitidos: 1 a 100" }
+        require(world.difficulty in setOf("peaceful", "easy", "normal", "hard")) {
+            "Dificultad inválida"
+        }
+    }
+
+    /** Preserves unrelated settings, but Synex owns the listed world keys. */
+    private fun applyWorldConfig(i: Instance, s: JSONObject) {
+        val world = worldOptions(s)
+        validateWorld(world)
+        val props = File(i.dir, "server.properties")
+        val properties = Properties()
+        if (props.isFile) props.reader(Charsets.UTF_8).use { properties.load(it) }
+        val existingLevelType = properties.getProperty("level-type")
+        val existingSeed = properties.getProperty("level-seed")
+        if (hasWorld(i)) {
+            // Never rewrite the generator of an already-created world.
+            require(existingLevelType == null ||
+                existingLevelType.equals(world.type, ignoreCase = true) ||
+                (world.type == "minecraft:normal" && existingLevelType.equals("DEFAULT", ignoreCase = true))) {
+                "El mundo ya existe: no se puede cambiar normal/plano sin crear otro mundo"
+            }
+            require(existingSeed == null || existingSeed == world.seed) {
+                "El mundo ya existe: no se puede cambiar su semilla"
+            }
+        }
+        properties.setProperty("server-port", properties.getProperty("server-port", s.getInt("port").toString()))
+        properties.setProperty("max-players", world.maxPlayers.toString())
+        properties.setProperty("online-mode", properties.getProperty("online-mode", "true"))
+        properties.setProperty("motd", properties.getProperty("motd", "Synex Host"))
+        properties.setProperty("level-name", properties.getProperty("level-name", "world"))
+        properties.setProperty("level-type", world.type)
+        properties.setProperty("level-seed", world.seed)
+        properties.setProperty("allow-nether", world.nether.toString())
+        properties.setProperty("generate-structures", world.structures.toString())
+        properties.setProperty("difficulty", world.difficulty)
+        properties.setProperty("view-distance", properties.getProperty("view-distance", "6"))
+        properties.setProperty("simulation-distance", properties.getProperty("simulation-distance", "4"))
+        val pending = File(i.dir, "server.properties.synex-tmp")
+        pending.writer(Charsets.UTF_8).use { properties.store(it, "Synex Host - Minecraft world configuration") }
+        if (!pending.renameTo(props)) {
+            pending.copyTo(props, overwrite = true)
+            pending.delete()
+        }
+
+        // Paper/Spigot reads the End switch from bukkit.yml -> settings.allow-end.
+        // Keep any other Bukkit or plugin settings intact.
+        val bukkit = File(i.dir, "bukkit.yml")
+        val lines = if (bukkit.isFile) bukkit.readLines().toMutableList() else mutableListOf()
+        val header = lines.indexOfFirst { it.trim() == "settings:" && !it.startsWith(" ") && !it.startsWith("\t") }
+        val value = "  allow-end: ${world.end}"
+        if (header == -1) {
+            lines.addAll(0, listOf("settings:", value))
+        } else {
+            val next = ((header + 1) until lines.size).firstOrNull { index ->
+                val text = lines[index]
+                text.isNotBlank() && !text.startsWith(" ") && !text.startsWith("\t") && !text.startsWith("#")
+            } ?: lines.size
+            val old = ((header + 1) until next).firstOrNull { idx ->
+                lines[idx].matches(Regex("""\s+allow-end\s*:.*"""))
+            }
+            if (old == null) lines.add(header + 1, value)
+            else lines[old] = value
+        }
+        val tempYml = File(i.dir, "bukkit.yml.synex-tmp")
+        tempYml.writeText(lines.joinToString("\n", postfix = "\n"))
+        if (!tempYml.renameTo(bukkit)) {
+            tempYml.copyTo(bukkit, overwrite = true)
+            tempYml.delete()
+        }
+        i.log("[Mundos] Tipo=${world.type}, semilla=${if (world.seed.isBlank()) "aleatoria" else world.seed}, " +
+            "Nether=${world.nether}, End=${world.end}, estructuras=${world.structures}")
+    }
+
+    /** Update future world generation settings without deleting existing data. */
+    fun configureWorld(id: String, world: WorldOptions) {
+        val i = instance(id)
+        requireStopped(i)
+        validateWorld(world)
+        synchronized(specList) {
+            val s = spec(id)
+            if (hasWorld(i)) {
+                val old = worldOptions(s)
+                require(world.type == old.type && world.seed == old.seed) {
+                    "El mundo ya está generado. Puedes cambiar Nether, End y dificultad, pero no tipo ni semilla."
+                }
+            }
+            s.put("worldType", world.type).put("worldSeed", world.seed)
+                .put("allowNether", world.nether).put("allowEnd", world.end)
+                .put("structures", world.structures).put("maxPlayers", world.maxPlayers)
+                .put("difficulty", world.difficulty)
+            persist()
+            applyWorldConfig(i, s)
+        }
+    }
+
     fun servers(): List<ServerInfo> = synchronized(specList) {
         val lan = lanIpv4()
         specList.map { s ->
@@ -138,7 +262,8 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                 (File(i.dir, "paper.jar").length() > 100_000L),
                 i.installing, i.process?.isAlive == true,
                 File(i.dir, "eula.txt").takeIf { it.isFile }?.readText()?.lineSequence()?.any { it.trim() == "eula=true" } == true,
-                i.error, i.installStep, i.installProgress, lan, i.ready)
+                i.error, i.installStep, i.installProgress, lan, i.ready,
+                worldOptions(s), hasWorld(i))
         }
     }
 
@@ -173,11 +298,12 @@ internal class LocalEngine private constructor(private val ctx: Context) {
         return versions
     }
 
-    fun create(name: String, version: String, ramMb: Int): JSONObject {
+    fun create(name: String, version: String, ramMb: Int, world: WorldOptions): JSONObject {
         require(name.matches(Regex("""[A-Za-z0-9 ._()\-áéíóúÁÉÍÓÚñÑ]{1,48}"""))) { "Nombre inválido" }
         require(version.matches(Regex("""\d{1,2}\.\d{1,2}(?:\.\d{1,2})?"""))) { "Versión inválida" }
         require(ramMb in 512..16384 && ramMb % 256 == 0) { "RAM inválida" }
         EmbeddedRuntime.majorFor(version)
+        validateWorld(world)
         synchronized(specList) {
             val base = name.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]+"), "-").trim('-').ifBlank { "minecraft" }
             var id = base
@@ -187,9 +313,14 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                 ?: error("No hay puertos disponibles")
             val spec = JSONObject().put("id", id).put("name", name).put("software", "Paper")
                 .put("version", version).put("ramMb", ramMb).put("port", port)
+                .put("worldType", world.type).put("worldSeed", world.seed)
+                .put("allowNether", world.nether).put("allowEnd", world.end)
+                .put("structures", world.structures).put("maxPlayers", world.maxPlayers)
+                .put("difficulty", world.difficulty)
             specList.add(spec)
             instances[id] = Instance(id, File(serversDir, id).apply { mkdirs() })
             persist()
+            applyWorldConfig(instance(id), spec)
             action(id, "install") // create and download without a separate setup step
             return JSONObject().put("id", id)
         }
@@ -236,11 +367,16 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                 val (runtime, java) = EmbeddedRuntime.prepare(ctx, s.getString("version")) { i.log(it) }
                 i.log("[Synex] Java integrado: ${java.absolutePath}")
                 EmbeddedRuntime.selfTest(ctx, runtime, java, i.dir) { i.log(it) }
-                File(i.dir, "server.properties").let { props ->
-                    if (!props.exists()) props.writeText("server-port=${s.getInt("port")}\nmax-players=10\nonline-mode=true\nmotd=Synex Host\n")
-                }
+                // Create world settings before the first Paper boot, so normal/flat
+                // generator and optional dimensions are applied to the first spawn.
+                applyWorldConfig(i, s)
                 val ram = s.getInt("ramMb")
-                val args = listOf(java.absolutePath, "-Xms512M", "-Xmx${ram}M", "-Djava.awt.headless=true", "-jar", "paper.jar", "nogui")
+                // Our bundled Android OpenJDK has a "-internal" version suffix.
+                // Paper's documented opt-out is required; put it BEFORE -jar.
+                i.log("[Synex] Java ARM64 no oficial: comprobación de versión de Paper omitida bajo tu responsabilidad")
+                val args = listOf(java.absolutePath, "-Xms512M", "-Xmx${ram}M",
+                    "-Djava.awt.headless=true", "-DPaper.IgnoreJavaVersion=true",
+                    "-jar", "paper.jar", "nogui")
                 val builder = ProcessBuilder(args).directory(i.dir).redirectErrorStream(true)
                 builder.environment().putAll(EmbeddedRuntime.environment(ctx, runtime, i.dir))
                 val proc = try { builder.start() } catch (e: Exception) {
@@ -250,6 +386,7 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                 }
                 i.error = null
                 i.ready = false
+                i.stopRequested = false
                 i.process = proc
                 i.log("[Synex] Iniciando ${s.getString("version")} con Java ${EmbeddedRuntime.majorFor(s.getString("version"))}...")
                 runCatching {
@@ -267,15 +404,23 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                         }
                     } } catch (e: Exception) { i.log("[ERROR] Consola: ${e.message}") }
                     val exit = proc.waitFor()
+                    val hadStarted = i.ready
+                    val stoppedByUser = i.stopRequested
                     i.ready = false
                     i.log("[Synex] Servidor detenido (código $exit)")
-                    if (exit != 0) i.error = "Java/Paper terminó con código $exit. Revisa la consola."
+                    when {
+                        exit != 0 -> i.error = "Paper terminó con código $exit. Revisa la consola."
+                        !hadStarted && !stoppedByUser -> i.error =
+                            "Paper terminó antes de crear/iniciar el mundo. Consulta la consola."
+                        else -> i.error = null
+                    }
+                    if (i.process === proc) i.process = null
                     if (instances.values.none { it.process?.isAlive == true }) {
                         ctx.stopService(Intent(ctx, HostService::class.java))
                     }
                 }
             }
-            "stop" -> sendCommand(id, "stop")
+            "stop" -> { i.stopRequested = true; sendCommand(id, "stop") }
             else -> error("Acción desconocida")
         }
     }
@@ -367,7 +512,7 @@ internal class LocalEngine private constructor(private val ctx: Context) {
         val runtime = File(ctx.filesDir, "runtimes/jre$major")
         val jar = File(i.dir, "paper.jar")
         return buildString {
-            appendLine("SYNEX HOST v0.8 / DIAGNÓSTICO LOCAL")
+            appendLine("SYNEX HOST v0.9 / DIAGNÓSTICO LOCAL")
             appendLine("Android API: ${Build.VERSION.SDK_INT}")
             appendLine("Arquitecturas: ${Build.SUPPORTED_ABIS.joinToString(",")}")
             appendLine("Servidor: ${config.getString("name")} / Paper $version")
@@ -375,6 +520,8 @@ internal class LocalEngine private constructor(private val ctx: Context) {
             appendLine("Heap pointer tagging disabled in app manifest: true")
             appendLine("LAN: ${lanIpv4() ?: "No disponible"}")
             appendLine("Servidor activo: ${i.process?.isAlive == true}")
+            appendLine("Mundo generado: ${hasWorld(i)}")
+            appendLine("Mundo configurado: ${worldOptions(config)}")
             appendLine("Java esperado: $major")
             appendLine("JRE modules: ${File(runtime, "lib/modules").isFile}")
             appendLine("JRE libjli: ${File(runtime, "lib/libjli.so").isFile}")
