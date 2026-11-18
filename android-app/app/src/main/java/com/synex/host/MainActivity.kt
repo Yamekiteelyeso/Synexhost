@@ -88,6 +88,13 @@ private fun SynexScreen() {
     var filesError by remember { mutableStateOf("") }
     var editorPath by remember { mutableStateOf<String?>(null) }
     var editorValue by remember { mutableStateOf("") }
+    var newDialog by remember { mutableStateOf(false) }
+    var newIsFolder by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+    var actionEntry by remember { mutableStateOf<FileEntry?>(null) }
+    var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
+    var renameValue by remember { mutableStateOf("") }
+    var deleteTarget by remember { mutableStateOf<FileEntry?>(null) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val api = remember { ApiClient(ctx) }
@@ -181,6 +188,17 @@ private fun SynexScreen() {
         }
     }
 
+    val backupLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri: Uri? ->
+        if (uri != null && selectedId.isNotBlank()) execute {
+            val out = ctx.contentResolver.openOutputStream(uri)
+                ?: error("No se pudo crear el respaldo")
+            api.exportBackup(selectedId, out)
+            snackbar.showSnackbar("Respaldo ZIP guardado")
+        }
+    }
+
     Scaffold(
         containerColor = Bg,
         snackbarHost = { SnackbarHost(snackbar) },
@@ -230,6 +248,18 @@ private fun SynexScreen() {
                                 clipboard.setPrimaryClip(ClipData.newPlainText("Diagnóstico Synex Host", report))
                                 snackbar.showSnackbar("Informe copiado. Pégalo en el chat para revisar el error.")
                             }
+                        },
+                        onCopyAddress = {
+                            val ip = selected.lanAddress
+                            if (ip != null) {
+                                val address = "$ip:${selected.port}"
+                                val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Dirección LAN de Minecraft", address))
+                                scope.launch { snackbar.showSnackbar("IP copiada: $address") }
+                            }
+                        },
+                        onBackup = {
+                            backupLauncher.launch("${selected.name.replace(Regex("[^a-zA-Z0-9_-]"), "_")}-backup.zip")
                         })
                 } else if (tab == 1) {
                     ConsolePanel(selected, logLines, consoleCommand, onCommand = { consoleCommand = it },
@@ -251,7 +281,15 @@ private fun SynexScreen() {
                             }
                         },
                         onRefresh = { filesRevision += 1 },
-                        onUpload = { uploadLauncher.launch(arrayOf("*/*")) })
+                        onUpload = { uploadLauncher.launch(arrayOf("*/*")) },
+                        onNewFile = { newIsFolder = false; newName = ""; newDialog = true },
+                        onNewFolder = { newIsFolder = true; newName = ""; newDialog = true },
+                        onMenu = { actionEntry = it },
+                        onBackup = {
+                            selected?.let { server ->
+                                backupLauncher.launch("${server.name.replace(Regex("[^a-zA-Z0-9_-]"), "_")}-backup.zip")
+                            }
+                        })
                 } else {
                     SettingsPanel()
                 }
@@ -279,6 +317,92 @@ private fun SynexScreen() {
                     execute { api.acceptEula(selected.id) }
                 }) { Text("Acepto la EULA") }
             }, dismissButton = { TextButton(onClick = { eulaDialog = false }) { Text("Cancelar") } })
+    }
+    if (newDialog && selected != null) {
+        AlertDialog(
+            onDismissRequest = { newDialog = false },
+            title = { Text(if (newIsFolder) "Crear carpeta" else "Crear archivo") },
+            text = {
+                OutlinedTextField(newName, onValueChange = { newName = it },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    label = { Text(if (newIsFolder) "Nombre de carpeta" else "Ejemplo: config.yml") })
+            },
+            confirmButton = {
+                TextButton(enabled = newName.isNotBlank(), onClick = {
+                    val name = newName.trim()
+                    val isFolder = newIsFolder
+                    val currentFolder = folder
+                    newDialog = false
+                    execute {
+                        require(name != "." && name != ".." && '/' !in name && '\\' !in name) {
+                            "Nombre inválido"
+                        }
+                        api.createEntry(selectedId,
+                            if (currentFolder.isBlank()) name else "$currentFolder/$name", isFolder)
+                        filesRevision += 1
+                        snackbar.showSnackbar(if (isFolder) "Carpeta creada" else "Archivo creado")
+                    }
+                }) { Text("Crear") }
+            },
+            dismissButton = { TextButton(onClick = { newDialog = false }) { Text("Cancelar") } }
+        )
+    }
+
+    actionEntry?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { actionEntry = null },
+            title = { Text(entry.name) },
+            text = { Text("Administrar archivo o carpeta. El servidor debe estar apagado.") },
+            confirmButton = { TextButton(onClick = {
+                renameValue = entry.name
+                renameTarget = entry
+                actionEntry = null
+            }) { Text("Renombrar") } },
+            dismissButton = { TextButton(onClick = {
+                deleteTarget = entry
+                actionEntry = null
+            }) { Text("Eliminar", color = Warning) } }
+        )
+    }
+
+    renameTarget?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Renombrar: ${entry.name}") },
+            text = {
+                OutlinedTextField(renameValue, onValueChange = { renameValue = it },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Nuevo nombre") })
+            },
+            confirmButton = { TextButton(onClick = {
+                val targetId = selectedId
+                val name = renameValue.trim()
+                renameTarget = null
+                execute {
+                    api.renameEntry(targetId, entry.path, name)
+                    filesRevision += 1
+                    snackbar.showSnackbar("Elemento renombrado")
+                }
+            }) { Text("Guardar") } },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancelar") } }
+        )
+    }
+
+    deleteTarget?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Eliminar definitivamente") },
+            text = { Text("¿Eliminar ${entry.path}? Se borrará también el contenido de la carpeta, sin posibilidad de deshacer.") },
+            confirmButton = { TextButton(onClick = {
+                val targetId = selectedId
+                deleteTarget = null
+                execute {
+                    api.deleteEntry(targetId, entry.path)
+                    filesRevision += 1
+                    snackbar.showSnackbar("Elemento eliminado")
+                }
+            }) { Text("Eliminar", color = Warning) } },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancelar") } }
+        )
     }
     if (editorPath != null && selected != null) {
         AlertDialog(
@@ -323,7 +447,7 @@ private fun ServerPicker(servers: List<ServerInfo>, chosen: String, onSelect: (S
 @Composable
 private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, onStart: () -> Unit,
                       onStop: () -> Unit, onEula: () -> Unit, onConsole: () -> Unit, onFiles: () -> Unit,
-                      onCopyDiagnostics: () -> Unit) {
+                      onCopyDiagnostics: () -> Unit, onCopyAddress: () -> Unit, onBackup: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Panel {
@@ -351,7 +475,22 @@ private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, 
                 Stat("RAM MÁX.", "${server.ramMb / 1024f} GB", Modifier.weight(1f))
                 Stat("PUERTO LAN", "${server.port}", Modifier.weight(1f))
             }
-            Text("IP de tu Wi-Fi  ·  Puerto editable en server.properties", color = Subtle, style = MaterialTheme.typography.labelSmall)
+            Surface(shape = RoundedCornerShape(12.dp), color = Bg) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("DIRECCIÓN PARA MINECRAFT JAVA (RED LOCAL)", color = Subtle,
+                            style = MaterialTheme.typography.labelSmall)
+                        Text(server.lanAddress?.let { "$it:${server.port}" } ?: "Sin IP de Wi-Fi disponible",
+                            color = Color.White, style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold)
+                    }
+                    IconButton(onClick = onCopyAddress, enabled = server.lanAddress != null) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Copiar IP", tint = Accent)
+                    }
+                }
+            }
+            Text("Solo red local. Fuera de la misma Wi-Fi se necesita túnel o configuración del router. El servidor debe estar completamente iniciado.",
+                color = Subtle, style = MaterialTheme.typography.bodySmall)
             if (server.installing) {
                 Text(server.installStep.ifBlank { "Preparando servidor..." }, color = Subtle,
                     style = MaterialTheme.typography.bodySmall)
@@ -416,6 +555,10 @@ private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, 
             OutlinedButton(onClick = onFiles, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Folder, null); Spacer(Modifier.width(8.dp)); Text("Explorar archivos y plugins")
             }
+            OutlinedButton(onClick = onBackup, enabled = !server.running && !server.installing,
+                modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Archive, null); Spacer(Modifier.width(8.dp)); Text("Exportar respaldo ZIP")
+            }
         }
         Text("La app ejecuta Java directamente en Android. El rendimiento depende de la memoria y temperatura del teléfono.",
             color = Subtle, style = MaterialTheme.typography.bodySmall)
@@ -460,7 +603,9 @@ private fun ConsolePanel(server: ServerInfo?, lines: List<String>, command: Stri
 
 @Composable
 private fun FilesPanel(server: ServerInfo?, folder: String, files: List<FileEntry>, error: String,
-                       onBack: () -> Unit, onOpen: (FileEntry) -> Unit, onRefresh: () -> Unit, onUpload: () -> Unit) {
+                       onBack: () -> Unit, onOpen: (FileEntry) -> Unit, onRefresh: () -> Unit,
+                       onUpload: () -> Unit, onNewFile: () -> Unit, onNewFolder: () -> Unit,
+                       onMenu: (FileEntry) -> Unit, onBackup: () -> Unit) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Archivos · ${server?.name ?: "..."}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -471,6 +616,21 @@ private fun FilesPanel(server: ServerInfo?, folder: String, files: List<FileEntr
                 maxLines = 1, overflow = TextOverflow.Ellipsis, color = Subtle)
             IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Actualizar") }
             IconButton(onClick = onUpload) { Icon(Icons.Default.UploadFile, contentDescription = "Subir archivo", tint = Accent) }
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(onClick = onNewFolder, enabled = server?.running != true) {
+                Icon(Icons.Default.CreateNewFolder, null, modifier = Modifier.size(17.dp))
+                Spacer(Modifier.width(4.dp)); Text("Carpeta")
+            }
+            OutlinedButton(onClick = onNewFile, enabled = server?.running != true) {
+                Icon(Icons.Default.NoteAdd, null, modifier = Modifier.size(17.dp))
+                Spacer(Modifier.width(4.dp)); Text("Archivo")
+            }
+            OutlinedButton(onClick = onBackup, enabled = server?.running != true) {
+                Icon(Icons.Default.Archive, null, modifier = Modifier.size(17.dp))
+                Spacer(Modifier.width(4.dp)); Text("Backup")
+            }
         }
         if (error.isNotBlank()) Text(error, color = Warning)
         if (files.isEmpty()) Text("Carpeta vacía o cargando...", color = Subtle)
@@ -485,7 +645,9 @@ private fun FilesPanel(server: ServerInfo?, folder: String, files: List<FileEntr
                             Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             if (!file.isDirectory) Text("${file.size} bytes", color = Subtle, style = MaterialTheme.typography.labelSmall)
                         }
-                        Icon(Icons.Default.ChevronRight, null, tint = Subtle)
+                        IconButton(onClick = { onMenu(file) }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Acciones de archivo", tint = Subtle)
+                        }
                     }
                 }
             }
@@ -503,7 +665,7 @@ private fun SettingsPanel() {
             Text("El primer uso prepara Java integrado. La descarga de Paper necesita Internet.", style = MaterialTheme.typography.bodySmall)
             Text("Solo teléfonos Android ARM64. Los mundos están guardados en el espacio privado de la aplicación.", style = MaterialTheme.typography.bodySmall)
         }
-        Text("Synex Host v0.6 · Diagnósticos · Sin Termux", color = Subtle,
+        Text("Synex Host v0.7 · LAN, backups y archivos · Sin Termux", color = Subtle,
             style = MaterialTheme.typography.labelSmall)
     }
 }
