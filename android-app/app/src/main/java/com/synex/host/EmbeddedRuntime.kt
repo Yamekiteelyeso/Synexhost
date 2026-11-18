@@ -9,6 +9,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 
 /** Android arm64 OpenJDK distributions are included as signed/pinned APK assets at build time.
  * Keep the launcher at JRE/bin/java so the JVM can resolve its own home directory.
@@ -109,7 +110,7 @@ internal object EmbeddedRuntime {
             throw IllegalStateException("No se puede iniciar Java en este Android: ${e.message}", e)
         }
         try {
-            if (!process.waitFor(25, java.util.concurrent.TimeUnit.SECONDS)) {
+            if (!process.waitFor(25, TimeUnit.SECONDS)) {
                 process.destroyForcibly()
                 throw IllegalStateException("Java no respondió durante 25 segundos")
             }
