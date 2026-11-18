@@ -95,6 +95,8 @@ private fun SynexScreen() {
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
     var renameValue by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<FileEntry?>(null) }
+    var ramDialog by remember { mutableStateOf(false) }
+    var updatedRam by remember { mutableIntStateOf(2048) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val api = remember { ApiClient(ctx) }
@@ -260,9 +262,24 @@ private fun SynexScreen() {
                         },
                         onBackup = {
                             backupLauncher.launch("${selected.name.replace(Regex("[^a-zA-Z0-9_-]"), "_")}-backup.zip")
+                        },
+                        onEditRam = {
+                            updatedRam = selected.ramMb
+                            ramDialog = true
                         })
                 } else if (tab == 1) {
                     ConsolePanel(selected, logLines, consoleCommand, onCommand = { consoleCommand = it },
+                        onQuick = { command ->
+                            selected?.let { current -> execute {
+                                api.sendCommand(current.id, command)
+                                snackbar.showSnackbar("Comando enviado: $command")
+                            } }
+                        },
+                        onCopyLogs = {
+                            val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Consola Synex Host", logLines.joinToString("\n")))
+                            scope.launch { snackbar.showSnackbar("Consola copiada") }
+                        },
                         onSend = {
                             val cmd = consoleCommand.trim()
                             if (cmd.isNotBlank() && selected != null) execute {
@@ -317,6 +334,31 @@ private fun SynexScreen() {
                     execute { api.acceptEula(selected.id) }
                 }) { Text("Acepto la EULA") }
             }, dismissButton = { TextButton(onClick = { eulaDialog = false }) { Text("Cancelar") } })
+    }
+    if (ramDialog && selected != null) {
+        AlertDialog(
+            onDismissRequest = { ramDialog = false },
+            title = { Text("RAM máxima · ${selected.name}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Límite de Java: ${updatedRam / 1024f} GB", fontWeight = FontWeight.Bold)
+                    Slider(value = updatedRam.toFloat(), valueRange = 512f..16384f, steps = 61,
+                        onValueChange = { updatedRam = ((it.toInt() / 256) * 256).coerceIn(512, 16384) })
+                    Text("Para modificar la RAM el servidor debe estar apagado. No reserves toda la memoria del teléfono.",
+                        color = Subtle, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { TextButton(onClick = {
+                val amount = updatedRam
+                val serverId = selected.id
+                ramDialog = false
+                execute {
+                    api.updateRam(serverId, amount)
+                    snackbar.showSnackbar("RAM configurada para el próximo inicio")
+                }
+            }) { Text("Guardar") } },
+            dismissButton = { TextButton(onClick = { ramDialog = false }) { Text("Cancelar") } }
+        )
     }
     if (newDialog && selected != null) {
         AlertDialog(
@@ -447,7 +489,8 @@ private fun ServerPicker(servers: List<ServerInfo>, chosen: String, onSelect: (S
 @Composable
 private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, onStart: () -> Unit,
                       onStop: () -> Unit, onEula: () -> Unit, onConsole: () -> Unit, onFiles: () -> Unit,
-                      onCopyDiagnostics: () -> Unit, onCopyAddress: () -> Unit, onBackup: () -> Unit) {
+                      onCopyDiagnostics: () -> Unit, onCopyAddress: () -> Unit, onBackup: () -> Unit,
+                      onEditRam: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Panel {
@@ -464,7 +507,7 @@ private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, 
                             tint = if (server.running) Success else if (server.installing) Warning else Subtle,
                             modifier = Modifier.size(7.dp))
                         Spacer(Modifier.width(5.dp))
-                        Text(if (server.running) "EN LÍNEA" else if (server.installing) "INSTALANDO" else "APAGADO",
+                        Text(if (server.ready) "EN LÍNEA" else if (server.running) "INICIANDO" else if (server.installing) "INSTALANDO" else "APAGADO",
                             color = if (server.running) Success else if (server.installing) Warning else Subtle,
                             style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                     }
@@ -559,6 +602,10 @@ private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, 
                 modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Archive, null); Spacer(Modifier.width(8.dp)); Text("Exportar respaldo ZIP")
             }
+            OutlinedButton(onClick = onEditRam, enabled = !server.running && !server.installing,
+                modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Tune, null); Spacer(Modifier.width(8.dp)); Text("Cambiar RAM del servidor")
+            }
         }
         Text("La app ejecuta Java directamente en Android. El rendimiento depende de la memoria y temperatura del teléfono.",
             color = Subtle, style = MaterialTheme.typography.bodySmall)
@@ -575,9 +622,21 @@ private fun Stat(title: String, value: String, modifier: Modifier) {
 
 @Composable
 private fun ConsolePanel(server: ServerInfo?, lines: List<String>, command: String,
-                         onCommand: (String) -> Unit, onSend: () -> Unit) {
+                         onCommand: (String) -> Unit, onSend: () -> Unit,
+                         onQuick: (String) -> Unit, onCopyLogs: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Consola · ${server?.name ?: "..."}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Consola · ${server?.name ?: "..."}", modifier = Modifier.weight(1f),
+                fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+            IconButton(onClick = onCopyLogs) { Icon(Icons.Default.ContentCopy, contentDescription = "Copiar consola", tint = Subtle) }
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("list", "save-all", "tps", "whitelist list", "time set day").forEach { command ->
+                FilterChip(selected = false, enabled = server?.ready == true, onClick = { onQuick(command) },
+                    label = { Text(command) })
+            }
+        }
         Surface(shape = RoundedCornerShape(14.dp), color = Color(0xFF090B10), modifier = Modifier.weight(1f).fillMaxWidth()) {
             val scroll = rememberScrollState()
             LaunchedEffect(lines.size) { scroll.scrollTo(scroll.maxValue) }
@@ -665,7 +724,7 @@ private fun SettingsPanel() {
             Text("El primer uso prepara Java integrado. La descarga de Paper necesita Internet.", style = MaterialTheme.typography.bodySmall)
             Text("Solo teléfonos Android ARM64. Los mundos están guardados en el espacio privado de la aplicación.", style = MaterialTheme.typography.bodySmall)
         }
-        Text("Synex Host v0.7 · LAN, backups y archivos · Sin Termux", color = Subtle,
+        Text("Synex Host v0.7 · LAN, backups, RAM y archivos · Sin Termux", color = Subtle,
             style = MaterialTheme.typography.labelSmall)
     }
 }

@@ -42,16 +42,38 @@ internal class LocalEngine private constructor(private val ctx: Context) {
         @Volatile var error: String? = null
         @Volatile var installStep: String = ""
         @Volatile var installProgress: Int = -1
+        @Volatile var ready = false
         fun step(message: String, percent: Int = -1) {
             installStep = message
             installProgress = percent
         }
         private var seq = 0
         private val ring = ArrayDeque<Pair<Int, String>>()
+        private val logFile get() = File(dir, "synex-console.log")
+        init {
+            // Keep previous logs after the UI process has been closed or restarted.
+            runCatching {
+                if (logFile.isFile) logFile.useLines { lines ->
+                    lines.toList().takeLast(150).forEach { line ->
+                        seq++
+                        ring.addLast(seq to line.take(4000))
+                    }
+                }
+            }
+        }
         @Synchronized fun log(s: String) {
+            val line = s.take(4000)
             seq++
-            ring.addLast(seq to s.take(4000))
+            ring.addLast(seq to line)
             if (ring.size > 2500) ring.removeFirst()
+            runCatching {
+                if (logFile.length() > 2_000_000L) {
+                    val old = File(dir, "synex-console.previous.log")
+                    old.delete()
+                    logFile.renameTo(old)
+                }
+                logFile.appendText(line + "\n")
+            }
         }
         @Synchronized fun logs(since: Int) = LogsPage(ring.filter { it.first > since }.map { it.second }, seq)
     }
@@ -116,7 +138,7 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                 (File(i.dir, "paper.jar").length() > 100_000L),
                 i.installing, i.process?.isAlive == true,
                 File(i.dir, "eula.txt").takeIf { it.isFile }?.readText()?.lineSequence()?.any { it.trim() == "eula=true" } == true,
-                i.error, i.installStep, i.installProgress, lan)
+                i.error, i.installStep, i.installProgress, lan, i.ready)
         }
     }
 
@@ -226,6 +248,7 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                     throw IllegalStateException(i.error, e)
                 }
                 i.error = null
+                i.ready = false
                 i.process = proc
                 i.log("[Synex] Iniciando ${s.getString("version")} con Java ${EmbeddedRuntime.majorFor(s.getString("version"))}...")
                 runCatching {
@@ -234,9 +257,16 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                 }.onFailure { i.log("[AVISO] Android no permitió fijar el servicio: ${it.message}") }
                 thread(name = "synex-console-$id", isDaemon = true) {
                     try { proc.inputStream.bufferedReader().useLines { lines ->
-                        lines.forEach { i.log(it) }
+                        lines.forEach { line ->
+                            i.log(line)
+                            if (line.contains("Done (") && line.contains("For help", ignoreCase = true)) {
+                                i.ready = true
+                                i.log("[Synex] Paper terminó de iniciar y acepta conexiones LAN")
+                            }
+                        }
                     } } catch (e: Exception) { i.log("[ERROR] Consola: ${e.message}") }
                     val exit = proc.waitFor()
+                    i.ready = false
                     i.log("[Synex] Servidor detenido (código $exit)")
                     if (exit != 0) i.error = "Java/Paper terminó con código $exit. Revisa la consola."
                     if (instances.values.none { it.process?.isAlive == true }) {
@@ -366,6 +396,17 @@ internal class LocalEngine private constructor(private val ctx: Context) {
         check(i.process?.isAlive != true && !i.installing) {
             "Apaga el servidor y termina la instalación antes de modificar estos archivos"
         }
+    }
+
+    fun updateRam(id: String, ramMb: Int) {
+        require(ramMb in 512..16384 && ramMb % 256 == 0) { "RAM fuera del rango válido" }
+        val i = instance(id)
+        requireStopped(i)
+        synchronized(specList) {
+            spec(id).put("ramMb", ramMb)
+            persist()
+        }
+        i.log("[Config] RAM máxima actualizada a $ramMb MB. Aplicará en el próximo inicio.")
     }
 
     fun createEntry(id: String, relative: String, directory: Boolean) {

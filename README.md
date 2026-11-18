@@ -51,3 +51,14 @@ Esta versión sideload utiliza `targetSdk=28` como compromiso de compatibilidad 
 Cuando falle una instalación, en la tarjeta de error pulsa «Copiar diagnóstico para soporte». Copia la versión instalada, API de Android, ABI, archivos presentes de JRE, permisos del ejecutable, tamaño de Paper, fase exacta del fallo y los últimos 65 mensajes de consola, incluyendo un fragmento de la excepción. El informe solo se prepara **localmente** y no se envía a ningún servicio; puedes revisar lo copiado antes de compartirlo (los registros de servidores y plugins pueden contener información sensible).
 
 La compilación en CI comprueba que la APK contiene Java 17/21, pero **no reproduce las restricciones de tu teléfono físico**. Esta versión diagnostica el problema y no garantiza por sí misma que Paper pueda arrancar en todos los dispositivos.
+
+## Synex Host v0.7 — Android 13 / Paper y administración
+- **Compatibilidad del motor**: se añade `android:allowNativeHeapPointerTagging="false"` para el aborto con el mensaje `Pointer tag ... was truncated` en Android 11+; según Android AOSP es una vía de compatibilidad que reduce una protección de seguridad frente a errores de memoria. No se considera una solución de seguridad a largo plazo.
+- **IP LAN visible y copiable**: la pantalla principal muestra la IPv4 de Wi-Fi/Ethernet y el puerto efectivo de `server.properties`. Es una dirección privada; no es una IP pública ni expone el servidor a Internet sin configurar la red.
+- **Servicio al minimizar**: continúa como *foreground service* con notificación, bloqueo parcial de CPU y bloqueo de Wi-Fi mientras el servidor esté vivo. Minimizar la interfaz o retirarla de recientes no debería cerrarlo por sí solo. Forzar detención, reiniciar el dispositivo o límites de batería/memoria pueden acabar con el servidor; no se garantiza 24/7.
+- **Archivos**: crear archivos de texto y carpetas, renombrar y eliminar con confirmación solo cuando esté detenido, además de editar, explorar y subir los tipos compatibles existentes.
+- **Backups**: exportación a ZIP con el selector de documentos de Android, solo con el servidor apagado para evitar mundos inconsistentes. Incluye archivos de servidor y mundo; máximo de 2 GB descomprimidos.
+- **RAM**: editar los límites de Java de cada servidor apagado entre 512 MB y 16 GB, en pasos de 256 MB.
+- **Consola**: accesos directos a `list`, `save-all`, `tps`, `whitelist list` y `time set day`; logs rotativos persistidos y función para copiar la salida.
+- **Preparación**: indicador separado de proceso Java en ejecución y servidor listo (se detecta la línea `Done (...)`).
+- **Sin confirmación de arranque en teléfono real**: la compilación y los tests Linux no reproducen el comportamiento de ARM64 bajo Android 13.

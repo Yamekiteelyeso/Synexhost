@@ -85,6 +85,22 @@ jobs:
               assert ("legal/java.security.jgss/LICENSE", "legal/java.base/LICENSE") in links
               print(f"Java {major}: checked {len(files)} entries and {len(links)} safe links")
           PY
+      - name: Check Android 13 compatibility and offline features
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          manifest = Path("android-app/app/src/main/AndroidManifest.xml").read_text()
+          core = Path("android-app/app/src/main/java/com/synex/host/LocalEngine.kt").read_text()
+          ui = Path("android-app/app/src/main/java/com/synex/host/MainActivity.kt").read_text()
+          assert 'android:allowNativeHeapPointerTagging="false"' in manifest
+          assert 'android:stopWithTask="false"' in manifest
+          for method in ('fun lanIpv4()', 'fun exportBackup(', 'fun createEntry(', 'fun renameEntry(', 'fun deleteEntry(', 'fun updateRam('):
+              assert method in core, method
+          for label in ('Copiar IP', 'Exportar respaldo ZIP', 'Cambiar RAM del servidor'):
+              assert label in ui, label
+          print("Manifest and feature wiring verified")
+          PY
       - name: Backend tests (legacy compatibility)
         run: python3 -m unittest discover -s backend/tests -v
       - name: Gradle

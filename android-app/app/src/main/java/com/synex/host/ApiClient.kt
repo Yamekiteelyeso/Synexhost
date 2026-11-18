@@ -30,13 +30,16 @@ class ApiClient(context: Context) {
         withContext(Dispatchers.IO) { engine.deleteEntry(id, path) }
     suspend fun exportBackup(id: String, output: java.io.OutputStream) =
         withContext(Dispatchers.IO) { engine.exportBackup(id, output) }
+    suspend fun updateRam(id: String, ramMb: Int) =
+        withContext(Dispatchers.IO) { engine.updateRam(id, ramMb) }
 }
 
 data class ServerInfo(
     val id: String, val name: String, val software: String, val version: String,
     val ramMb: Int, val port: Int, val installed: Boolean, val installing: Boolean,
     val running: Boolean, val eulaAccepted: Boolean, val installError: String?,
-    val installStep: String = "", val installProgress: Int = -1, val lanAddress: String? = null
+    val installStep: String = "", val installProgress: Int = -1, val lanAddress: String? = null,
+    val ready: Boolean = false
 )
 
 data class FileEntry(val name: String, val path: String, val isDirectory: Boolean, val size: Long)
