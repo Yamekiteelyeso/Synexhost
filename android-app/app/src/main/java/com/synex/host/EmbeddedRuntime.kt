@@ -7,6 +7,7 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.tukaani.xz.XZInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.Files
 import java.security.MessageDigest
 
 /** Android arm64 OpenJDK distributions are included as signed/pinned APK assets at build time.
@@ -57,7 +58,7 @@ internal object EmbeddedRuntime {
                                                 "Enlace Java sale del directorio permitido"
                                             }
                                             target.parentFile?.mkdirs()
-                                            if (java.nio.file.Files.isSymbolicLink(target.toPath())) target.delete()
+                                            if (Files.isSymbolicLink(target.toPath())) target.delete()
                                             Os.symlink(link, target.absolutePath)
                                         }
                                         entry.isFile -> {
