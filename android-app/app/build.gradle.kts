@@ -15,8 +15,8 @@ android {
         // Sideload-only; replace with JNI launcher for Play distribution.
         targetSdk = 28
         ndk { abiFilters += "arm64-v8a" }
-        versionCode = 7
-        versionName = "0.7.0"
+        versionCode = 8
+        versionName = "0.8.0"
     }
 
     buildFeatures {

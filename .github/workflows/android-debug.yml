@@ -33,6 +33,32 @@ jobs:
           test -n "$SDKMANAGER" && test -x "$SDKMANAGER"
           yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null || true
           "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - name: Compile ARM64 JVM heap tagging compatibility shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ -d "$SDK_ROOT/ndk" ]; then
+            NDK_DIR="$(find "$SDK_ROOT/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          else
+            NDK_DIR=""
+          fi
+          if [ -z "$NDK_DIR" ] || [ ! -x "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" ]; then
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+            "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "ndk;27.2.12479018"
+            NDK_DIR="$SDK_ROOT/ndk/27.2.12479018"
+          fi
+          CC="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
+          test -x "$CC"
+          destination=android-app/app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$destination"
+          "$CC" -shared -fPIC -O2 -Wall -Wextra -Werror \
+            -Wl,-z,relro,-z,now \
+            -o "$destination/libsynextagfix.so" \
+            android-app/app/src/main/cpp/synex_tagfix.c -ldl
+          file "$destination/libsynextagfix.so"
+          readelf -h "$destination/libsynextagfix.so" | grep -E 'AArch64'
+          readelf -d "$destination/libsynextagfix.so" | grep -E 'libc.so'
       - name: Bundle pinned Android ARM64 OpenJDK 17 and 21
         shell: bash
         run: |
@@ -116,6 +142,8 @@ jobs:
           set -euo pipefail
           apk=android-app/app/build/outputs/apk/debug/app-debug.apk
           test -s "$apk"
+          unzip -l "$apk" | grep -E 'lib/arm64-v8a/libsynextagfix.so'
+          unzip -p "$apk" lib/arm64-v8a/libsynextagfix.so | strings | grep -F 'SYNEX_HEAP_TAGGING_DISABLED'
           unzip -l "$apk" | grep -E 'assets/runtimes/jre17.tar.xz'
           unzip -l "$apk" | grep -E 'assets/runtimes/jre21.tar.xz'
       - name: Upload APK

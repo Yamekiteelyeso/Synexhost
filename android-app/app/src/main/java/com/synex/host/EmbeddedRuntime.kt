@@ -119,19 +119,39 @@ internal object EmbeddedRuntime {
             require(process.exitValue() == 0 && output.contains("version", ignoreCase = true)) {
                 "Java no inició correctamente (código ${process.exitValue()}): ${output.take(300)}"
             }
+            // A native JVM started with ProcessBuilder is not the Android app's Zygote process.
+            // The manifest opt-out does not reliably initialize its Bionic heap state.
+            if (Build.VERSION.SDK_INT >= 30) {
+                require(output.contains("SYNEX_HEAP_TAGGING_DISABLED")) {
+                    "La biblioteca de compatibilidad Java no se cargó o no pudo desactivar " +
+                        "el etiquetado de punteros. Consulta la consola: ${output.take(400)}"
+                }
+            }
         } finally {
             if (process.isAlive) process.destroyForcibly()
         }
     }
 
     fun environment(ctx: Context, runtime: File, serverDir: File): Map<String, String> {
-        val libs = listOf(File(runtime, "lib"), File(runtime, "lib/server"), File(ctx.applicationInfo.nativeLibraryDir))
+        val nativeDir = File(ctx.applicationInfo.nativeLibraryDir)
+        val libs = listOf(File(runtime, "lib"), File(runtime, "lib/server"), nativeDir)
+        // LD_PRELOAD loads a tiny NDK shim into the child JVM (not the main UI process).
+        // The constructor disables Android Bionic's incompatible heap pointer tagging
+        // before the OpenJDK native libraries start allocating/freeing memory.
+        val compat = File(nativeDir, "libsynextagfix.so")
+        if (Build.VERSION.SDK_INT >= 30) {
+            require(compat.isFile && compat.length() > 1000L) {
+                "Falta la biblioteca ARM64 de compatibilidad Java en la APK"
+            }
+        }
         return mapOf(
             "JAVA_HOME" to runtime.absolutePath,
             "LD_LIBRARY_PATH" to libs.joinToString(":") { it.absolutePath },
             "TMPDIR" to File(serverDir, "tmp").apply { mkdirs() }.absolutePath,
             "HOME" to ctx.filesDir.absolutePath,
             "LANG" to "en_US.UTF-8"
-        )
+        ) + if (Build.VERSION.SDK_INT >= 30) {
+            mapOf("LD_PRELOAD" to compat.absolutePath)
+        } else emptyMap()
     }
 }

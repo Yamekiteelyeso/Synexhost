@@ -62,3 +62,9 @@ La compilación en CI comprueba que la APK contiene Java 17/21, pero **no reprod
 - **Consola**: accesos directos a `list`, `save-all`, `tps`, `whitelist list` y `time set day`; logs rotativos persistidos y función para copiar la salida.
 - **Preparación**: indicador separado de proceso Java en ejecución y servidor listo (se detecta la línea `Done (...)`).
 - **Sin confirmación de arranque en teléfono real**: la compilación y los tests Linux no reproducen el comportamiento de ARM64 bajo Android 13.
+
+## Synex Host v0.8 — reparación enfocada del aborto código 134 (Android 13)
+**Diagnóstico de usuario**: OpenJDK 17 inicia `-version`, pero al iniciar Paper 1.20.1 (descargando `mojang_1.20.1.jar`) Bionic aborta con `Pointer tag ... was truncated`. Código de salida 134 equivale a SIGABRT. El fallo no es de RAM ni un jar Paper incompleto.
+**Corrección**: la opción del manifiesto desactiva tagging en el proceso principal, pero no necesariamente en el Java lanzado por `execve/ProcessBuilder`. La APK ahora compila e incluye `libsynextagfix.so` para ARM64, cargada mediante `LD_PRELOAD` solamente en la JVM. Un constructor llama `mallopt(-204,0)` para Android API 31+ y reserva compatibilidad `android_mallopt(8,...)` para API 30. La JVM imprime `SYNEX_HEAP_TAGGING_DISABLED` si esa operación tuvo éxito.
+**Verificación**: `java -version` antes de instalar o ejecutar exige la marca del parche en Android 11+; si falla aparece un error claro sin ejecutar Paper. La APK y biblioteca se verifican en GitHub Actions, pero no hemos ejecutado aún Paper en un teléfono Android 13 desde este entorno.
+**Advertencia**: el shim desactiva una mitigación de memoria para el proceso Java y es una solución de compatibilidad temporal, no una corrección de raíz de OpenJDK. No se instala ningún programa externo. Se conserva la IP LAN, servicio en primer plano, consola, archivos, y copias ZIP.

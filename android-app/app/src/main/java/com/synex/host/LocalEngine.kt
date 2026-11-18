@@ -235,6 +235,7 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                 val s = spec(id)
                 val (runtime, java) = EmbeddedRuntime.prepare(ctx, s.getString("version")) { i.log(it) }
                 i.log("[Synex] Java integrado: ${java.absolutePath}")
+                EmbeddedRuntime.selfTest(ctx, runtime, java, i.dir) { i.log(it) }
                 File(i.dir, "server.properties").let { props ->
                     if (!props.exists()) props.writeText("server-port=${s.getInt("port")}\nmax-players=10\nonline-mode=true\nmotd=Synex Host\n")
                 }
@@ -366,7 +367,7 @@ internal class LocalEngine private constructor(private val ctx: Context) {
         val runtime = File(ctx.filesDir, "runtimes/jre$major")
         val jar = File(i.dir, "paper.jar")
         return buildString {
-            appendLine("SYNEX HOST v0.7 / DIAGNÓSTICO LOCAL")
+            appendLine("SYNEX HOST v0.8 / DIAGNÓSTICO LOCAL")
             appendLine("Android API: ${Build.VERSION.SDK_INT}")
             appendLine("Arquitecturas: ${Build.SUPPORTED_ABIS.joinToString(",")}")
             appendLine("Servidor: ${config.getString("name")} / Paper $version")
@@ -378,6 +379,7 @@ internal class LocalEngine private constructor(private val ctx: Context) {
             appendLine("JRE modules: ${File(runtime, "lib/modules").isFile}")
             appendLine("JRE libjli: ${File(runtime, "lib/libjli.so").isFile}")
             appendLine("Java bin: ${File(runtime, "bin/java").isFile}")
+            appendLine("Android pointer tagging shim: ${File(ctx.applicationInfo.nativeLibraryDir, "libsynextagfix.so").isFile}")
             appendLine("Java ejecutable: ${File(runtime, "bin/java").canExecute()}")
             appendLine("Paper JAR: ${jar.isFile} (${jar.length()} bytes)")
             appendLine("Espacio disponible: ${ctx.filesDir.usableSpace / (1024 * 1024)} MB")
