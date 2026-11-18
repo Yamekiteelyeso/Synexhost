@@ -22,13 +22,21 @@ class ApiClient(context: Context) {
     suspend fun fileContent(id: String, path: String): String = withContext(Dispatchers.IO) { engine.fileContent(id, path) }
     suspend fun saveFile(id: String, path: String, content: String) = withContext(Dispatchers.IO) { engine.saveFile(id, path, content) }
     suspend fun upload(id: String, path: String, bytes: ByteArray) = withContext(Dispatchers.IO) { engine.upload(id, path, bytes) }
+    suspend fun createEntry(id: String, path: String, directory: Boolean) =
+        withContext(Dispatchers.IO) { engine.createEntry(id, path, directory) }
+    suspend fun renameEntry(id: String, path: String, newName: String) =
+        withContext(Dispatchers.IO) { engine.renameEntry(id, path, newName) }
+    suspend fun deleteEntry(id: String, path: String) =
+        withContext(Dispatchers.IO) { engine.deleteEntry(id, path) }
+    suspend fun exportBackup(id: String, output: java.io.OutputStream) =
+        withContext(Dispatchers.IO) { engine.exportBackup(id, output) }
 }
 
 data class ServerInfo(
     val id: String, val name: String, val software: String, val version: String,
     val ramMb: Int, val port: Int, val installed: Boolean, val installing: Boolean,
     val running: Boolean, val eulaAccepted: Boolean, val installError: String?,
-    val installStep: String = "", val installProgress: Int = -1
+    val installStep: String = "", val installProgress: Int = -1, val lanAddress: String? = null
 )
 
 data class FileEntry(val name: String, val path: String, val isDirectory: Boolean, val size: Long)

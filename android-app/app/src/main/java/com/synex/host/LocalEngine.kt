@@ -9,6 +9,12 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.NetworkInterface
+import java.util.Collections
+import java.io.OutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import java.net.URL
 import java.security.MessageDigest
 import java.util.Locale
@@ -81,14 +87,36 @@ internal class LocalEngine private constructor(private val ctx: Context) {
     }
     private fun instance(id: String) = instances[id] ?: error("Servidor no encontrado")
 
+    fun lanIpv4(): String? = runCatching {
+        val choices = mutableListOf<Pair<Int, String>>()
+        for (iface in Collections.list(NetworkInterface.getNetworkInterfaces())) {
+            if (!iface.isUp || iface.isLoopback) continue
+            val name = iface.name.lowercase(Locale.ROOT)
+            // Only report addresses plausibly reachable on local Wi-Fi or Ethernet.
+            if (!listOf("wlan", "wifi", "eth", "ap", "br", "rndis").any { name.startsWith(it) }) continue
+            for (address in Collections.list(iface.inetAddresses)) {
+                if (address is Inet4Address && address.isSiteLocalAddress &&
+                    !address.isLoopbackAddress && !address.isLinkLocalAddress) {
+                    choices.add((if (name.startsWith("wlan") || name.startsWith("wifi")) 0 else 1) to address.hostAddress)
+                }
+            }
+        }
+        choices.sortedBy { it.first }.firstOrNull()?.second
+    }.getOrNull()
+
     fun servers(): List<ServerInfo> = synchronized(specList) {
+        val lan = lanIpv4()
         specList.map { s ->
             val i = instance(s.getString("id"))
+            val portFromProperties = File(i.dir, "server.properties").takeIf { it.isFile }
+                ?.readLines()?.firstOrNull { it.trimStart().startsWith("server-port=") }
+                ?.substringAfter("=")?.trim()?.toIntOrNull()?.takeIf { it in 1..65535 }
             ServerInfo(s.getString("id"), s.getString("name"), "Paper", s.getString("version"),
-                s.getInt("ramMb"), s.getInt("port"), (File(i.dir, "paper.jar").length() > 100_000L),
+                s.getInt("ramMb"), portFromProperties ?: s.getInt("port"),
+                (File(i.dir, "paper.jar").length() > 100_000L),
                 i.installing, i.process?.isAlive == true,
                 File(i.dir, "eula.txt").takeIf { it.isFile }?.readText()?.lineSequence()?.any { it.trim() == "eula=true" } == true,
-                i.error, i.installStep, i.installProgress)
+                i.error, i.installStep, i.installProgress, lan)
         }
     }
 
@@ -308,11 +336,14 @@ internal class LocalEngine private constructor(private val ctx: Context) {
         val runtime = File(ctx.filesDir, "runtimes/jre$major")
         val jar = File(i.dir, "paper.jar")
         return buildString {
-            appendLine("SYNEX HOST v0.6 / DIAGNÓSTICO LOCAL")
+            appendLine("SYNEX HOST v0.7 / DIAGNÓSTICO LOCAL")
             appendLine("Android API: ${Build.VERSION.SDK_INT}")
             appendLine("Arquitecturas: ${Build.SUPPORTED_ABIS.joinToString(",")}")
             appendLine("Servidor: ${config.getString("name")} / Paper $version")
             appendLine("RAM: ${config.getInt("ramMb")} MB")
+            appendLine("Heap pointer tagging disabled in app manifest: true")
+            appendLine("LAN: ${lanIpv4() ?: "No disponible"}")
+            appendLine("Servidor activo: ${i.process?.isAlive == true}")
             appendLine("Java esperado: $major")
             appendLine("JRE modules: ${File(runtime, "lib/modules").isFile}")
             appendLine("JRE libjli: ${File(runtime, "lib/libjli.so").isFile}")
@@ -328,6 +359,85 @@ internal class LocalEngine private constructor(private val ctx: Context) {
     }
 
     fun logs(id: String, since: Int) = instance(id).logs(since)
+
+
+    /** File actions are scoped to this server and refuse destructive changes while Paper runs. */
+    private fun requireStopped(i: Instance) {
+        check(i.process?.isAlive != true && !i.installing) {
+            "Apaga el servidor y termina la instalación antes de modificar estos archivos"
+        }
+    }
+
+    fun createEntry(id: String, relative: String, directory: Boolean) {
+        val i = instance(id)
+        requireStopped(i)
+        val file = path(i, relative)
+        require(file != i.dir.canonicalFile && !file.exists() && file.parentFile?.isDirectory == true) {
+            "Nombre o carpeta de destino inválidos"
+        }
+        if (directory) {
+            require(file.mkdir()) { "No se pudo crear la carpeta" }
+        } else {
+            require(file.extension.lowercase() in setOf("txt", "properties", "yml", "yaml", "json", "toml", "cfg", "conf", "md")) {
+                "Para crear archivos nuevos, utiliza una extensión de texto compatible"
+            }
+            require(file.createNewFile()) { "No se pudo crear el archivo" }
+        }
+        i.log("[Archivos] Creado: $relative")
+    }
+
+    fun renameEntry(id: String, relative: String, newName: String) {
+        val i = instance(id)
+        requireStopped(i)
+        require(newName.matches(Regex("""[a-zA-Z0-9_.() -]{1,120}""")) &&
+            newName != "." && newName != "..") { "Nombre inválido" }
+        val old = path(i, relative)
+        require(old != i.dir.canonicalFile && old.exists() &&
+            !java.nio.file.Files.isSymbolicLink(old.toPath())) { "Archivo no encontrado" }
+        val dest = path(i, old.relativeTo(i.dir).invariantSeparatorsPath.substringBeforeLast('/', "")
+            .let { folder -> if (folder.isBlank()) newName else "$folder/$newName" })
+        require(!dest.exists()) { "Ya existe un archivo con ese nombre" }
+        require(old.renameTo(dest)) { "No se pudo renombrar" }
+        i.log("[Archivos] Renombrado: $relative → $newName")
+    }
+
+    fun deleteEntry(id: String, relative: String) {
+        val i = instance(id)
+        requireStopped(i)
+        val target = path(i, relative)
+        require(target != i.dir.canonicalFile && target.exists() &&
+            !java.nio.file.Files.isSymbolicLink(target.toPath())) { "Ruta inválida" }
+        require(if (target.isDirectory) target.deleteRecursively() else target.delete()) {
+            "No se pudo eliminar completamente"
+        }
+        i.log("[Archivos] Eliminado: $relative")
+    }
+
+    /** Write a complete ZIP backup to a document chosen by the user. Never serve a live world. */
+    fun exportBackup(id: String, target: OutputStream) {
+        val i = instance(id)
+        requireStopped(i)
+        val base = i.dir.canonicalPath + File.separator
+        var total = 0L
+        var count = 0
+        ZipOutputStream(target.buffered()).use { zip ->
+            i.dir.walkTopDown().onEnter { candidate ->
+                !java.nio.file.Files.isSymbolicLink(candidate.toPath())
+            }.filter { it.isFile }.forEach { file ->
+                require(file.canonicalPath.startsWith(base)) { "Archivo fuera del servidor" }
+                if (file.name.endsWith(".download") || file.name.endsWith(".synex-tmp")) return@forEach
+                total += file.length()
+                require(total <= 2L * 1024 * 1024 * 1024) {
+                    "Respaldo supera 2 GB. Exporta el mundo por partes"
+                }
+                zip.putNextEntry(ZipEntry(file.relativeTo(i.dir).invariantSeparatorsPath))
+                file.inputStream().use { it.copyTo(zip, bufferSize = 128 * 1024) }
+                zip.closeEntry()
+                count++
+            }
+        }
+        i.log("[Backups] Exportados $count archivos ($total bytes)")
+    }
 
     private fun path(i: Instance, relative: String): File {
         require('\u0000' !in relative && '\\' !in relative && !relative.startsWith('/')) { "Ruta no válida" }
