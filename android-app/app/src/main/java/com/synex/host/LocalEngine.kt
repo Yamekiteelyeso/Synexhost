@@ -3,6 +3,7 @@ package com.synex.host
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -166,9 +167,13 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                         downloadPaper(i, version)
                         i.step("Instalación completa", 100)
                     } catch (e: Exception) {
-                        i.error = e.message ?: "Falló la instalación"
+                        i.error = "${e.javaClass.simpleName}: ${e.message ?: "Falló la instalación"}"
                         i.step("Instalación interrumpida")
                         i.log("[ERROR] ${i.error}")
+                        e.stackTrace.take(8).forEach { frame ->
+                            i.log("[TRACE] $frame")
+                        }
+                        Log.e("SynexHost", "Installation failed for ${i.id}", e)
                     } finally { i.installing = false }
                 }
             }
@@ -294,6 +299,34 @@ internal class LocalEngine private constructor(private val ctx: Context) {
         proc.outputStream.flush()
         i.log("> $cmd")
     }
+    /** Offline, user-controlled diagnostic text; never transmitted to any server. */
+    fun diagnostics(id: String): String {
+        val i = instance(id)
+        val config = spec(id)
+        val version = config.getString("version")
+        val major = EmbeddedRuntime.majorFor(version)
+        val runtime = File(ctx.filesDir, "runtimes/jre$major")
+        val jar = File(i.dir, "paper.jar")
+        return buildString {
+            appendLine("SYNEX HOST v0.6 / DIAGNÓSTICO LOCAL")
+            appendLine("Android API: ${Build.VERSION.SDK_INT}")
+            appendLine("Arquitecturas: ${Build.SUPPORTED_ABIS.joinToString(",")}")
+            appendLine("Servidor: ${config.getString("name")} / Paper $version")
+            appendLine("RAM: ${config.getInt("ramMb")} MB")
+            appendLine("Java esperado: $major")
+            appendLine("JRE modules: ${File(runtime, "lib/modules").isFile}")
+            appendLine("JRE libjli: ${File(runtime, "lib/libjli.so").isFile}")
+            appendLine("Java bin: ${File(runtime, "bin/java").isFile}")
+            appendLine("Java ejecutable: ${File(runtime, "bin/java").canExecute()}")
+            appendLine("Paper JAR: ${jar.isFile} (${jar.length()} bytes)")
+            appendLine("Espacio disponible: ${ctx.filesDir.usableSpace / (1024 * 1024)} MB")
+            appendLine("Etapa: ${i.installStep}")
+            appendLine("Error: ${i.error ?: "Ninguno"}")
+            appendLine("--- Últimos registros ---")
+            i.logs(0).lines.takeLast(65).forEach { appendLine(it) }
+        }.take(18000)
+    }
+
     fun logs(id: String, since: Int) = instance(id).logs(since)
 
     private fun path(i: Instance, relative: String): File {

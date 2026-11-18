@@ -2,6 +2,8 @@ package com.synex.host
 
 import android.app.ActivityManager
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -220,7 +222,15 @@ private fun SynexScreen() {
                         onStop = { execute { api.action(selected.id, "stop") } },
                         onEula = { eulaDialog = true },
                         onConsole = { tab = 1 },
-                        onFiles = { tab = 2 })
+                        onFiles = { tab = 2 },
+                        onCopyDiagnostics = {
+                            execute {
+                                val report = api.diagnostics(selected.id)
+                                val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Diagnóstico Synex Host", report))
+                                snackbar.showSnackbar("Informe copiado. Pégalo en el chat para revisar el error.")
+                            }
+                        })
                 } else if (tab == 1) {
                     ConsolePanel(selected, logLines, consoleCommand, onCommand = { consoleCommand = it },
                         onSend = {
@@ -312,7 +322,8 @@ private fun ServerPicker(servers: List<ServerInfo>, chosen: String, onSelect: (S
 
 @Composable
 private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, onStart: () -> Unit,
-                      onStop: () -> Unit, onEula: () -> Unit, onConsole: () -> Unit, onFiles: () -> Unit) {
+                      onStop: () -> Unit, onEula: () -> Unit, onConsole: () -> Unit, onFiles: () -> Unit,
+                      onCopyDiagnostics: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Panel {
@@ -387,6 +398,11 @@ private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, 
                                 Spacer(Modifier.width(6.dp)); Text("Reintentar")
                             }
                             TextButton(onClick = onConsole) { Text("Ver registros") }
+                        }
+                        OutlinedButton(onClick = onCopyDiagnostics, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Copiar diagnóstico para soporte")
                         }
                     }
                 }
@@ -487,7 +503,7 @@ private fun SettingsPanel() {
             Text("El primer uso prepara Java integrado. La descarga de Paper necesita Internet.", style = MaterialTheme.typography.bodySmall)
             Text("Solo teléfonos Android ARM64. Los mundos están guardados en el espacio privado de la aplicación.", style = MaterialTheme.typography.bodySmall)
         }
-        Text("Synex Host v0.5 · Java integrado · Sin Termux", color = Subtle,
+        Text("Synex Host v0.6 · Diagnósticos · Sin Termux", color = Subtle,
             style = MaterialTheme.typography.labelSmall)
     }
 }

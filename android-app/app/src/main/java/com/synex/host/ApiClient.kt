@@ -17,6 +17,7 @@ class ApiClient(context: Context) {
     suspend fun acceptEula(id: String) = withContext(Dispatchers.IO) { engine.acceptEula(id) }
     suspend fun sendCommand(id: String, command: String) = withContext(Dispatchers.IO) { engine.sendCommand(id, command) }
     suspend fun logs(id: String, since: Int): LogsPage = withContext(Dispatchers.IO) { engine.logs(id, since) }
+    suspend fun diagnostics(id: String): String = withContext(Dispatchers.IO) { engine.diagnostics(id) }
     suspend fun files(id: String, path: String): List<FileEntry> = withContext(Dispatchers.IO) { engine.files(id, path) }
     suspend fun fileContent(id: String, path: String): String = withContext(Dispatchers.IO) { engine.fileContent(id, path) }
     suspend fun saveFile(id: String, path: String, content: String) = withContext(Dispatchers.IO) { engine.saveFile(id, path, content) }
