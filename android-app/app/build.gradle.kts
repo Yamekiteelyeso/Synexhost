@@ -12,8 +12,9 @@ android {
         applicationId = "com.synex.host"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        ndk { abiFilters += "arm64-v8a" }
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildFeatures {
@@ -27,6 +28,7 @@ android {
         jvmTarget = "17"
     }
     packaging {
+        jniLibs.keepDebugSymbols += "**/libsynexjava*.so"
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
 }
@@ -37,6 +39,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.0")
+    implementation("org.tukaani:xz:1.10")
+    implementation("org.apache.commons:commons-compress:1.27.1")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.foundation:foundation")

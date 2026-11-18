@@ -1,4 +1,4 @@
-name: Android debug APK
+name: Android standalone APK
 
 on:
   push:
@@ -14,13 +14,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: JDK 17
+      - name: JDK 17 for Gradle
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      # The GitHub Ubuntu runner already contains the command-line Android SDK.
-      # setup-android@v3 currently fails when it asks for the removed "tools" package.
       - name: Prepare Android SDK 35
         shell: bash
         run: |
@@ -33,24 +31,57 @@ jobs:
             SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -maxdepth 3 -type f -name sdkmanager | sort -V | tail -1)"
           fi
           test -n "$SDKMANAGER" && test -x "$SDKMANAGER"
-          "$SDKMANAGER" --version
           yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null || true
-          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install \
-            "platforms;android-35" \
-            "build-tools;35.0.0" \
-            "platform-tools"
-      - name: Backend tests
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - name: Bundle pinned Android ARM64 OpenJDK 17 and 21
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets="android-app/app/src/main/assets/runtimes"
+          libs="android-app/app/src/main/jniLibs/arm64-v8a"
+          mkdir -p "$assets" "$libs"
+          for major in 17 21; do
+            case "$major" in
+              17) tag=download_jre17; sha=e162c860fe05ee4a4e4af7606437419879f6c748386a7b09fa77d10db6a64091 ;;
+              21) tag=download_jre21; sha=8d41ec401ee59f7722df60ed991f81ad146e130452804bfdd8a05d3436f7bbfe ;;
+            esac
+            archive="$RUNNER_TEMP/jre$major.tar.xz"
+            curl -fsSL --retry 3 "https://github.com/AngelAuraMC/angelauramc-openjdk-build/releases/download/$tag/jre$major-android-arm64.tar.xz" -o "$archive"
+            echo "$sha  $archive" | sha256sum -c -
+            source="$RUNNER_TEMP/jre$major-source"
+            mkdir -p "$source"
+            tar -xJf "$archive" -C "$source"
+            javafile="$(find "$source" -type f -path '*/bin/java' | head -1)"
+            test -n "$javafile"
+            root="$(dirname "$(dirname "$javafile")")"
+            test -s "$root/lib/modules"
+            cp "$javafile" "$libs/libsynexjava$major.so"
+            chmod 755 "$libs/libsynexjava$major.so"
+            tar -cJf "$assets/jre$major.tar.xz" -C "$root" .
+            echo "Packed Java $major: $(du -h "$assets/jre$major.tar.xz" | cut -f1)"
+          done
+      - name: Backend tests (legacy compatibility)
         run: python3 -m unittest discover -s backend/tests -v
       - name: Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Build debug APK
+      - name: Build standalone debug APK
         working-directory: android-app
         run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Check bundled runtime and APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=android-app/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          unzip -l "$apk" | grep -E 'lib/arm64-v8a/libsynexjava17.so'
+          unzip -l "$apk" | grep -E 'lib/arm64-v8a/libsynexjava21.so'
+          unzip -l "$apk" | grep -E 'assets/runtimes/jre17.tar.xz'
+          unzip -l "$apk" | grep -E 'assets/runtimes/jre21.tar.xz'
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SynexHost-debug-apk
+          name: SynexHost-standalone-debug-apk
           path: android-app/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

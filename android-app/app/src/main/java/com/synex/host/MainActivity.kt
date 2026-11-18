@@ -67,9 +67,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun SynexScreen() {
     val ctx = LocalContext.current
-    val prefs = remember { ctx.getSharedPreferences("synex-connection", 0) }
-    var token by remember { mutableStateOf(prefs.getString("token", "") ?: "") }
-    var connected by remember { mutableStateOf(token.isNotBlank()) }
+    // Server engine is embedded: no external setup, Termux or token.
+    val token = ""
+    val connected = true
     var connectionError by remember { mutableStateOf("") }
     var servers by remember { mutableStateOf<List<ServerInfo>>(emptyList()) }
     var selectedId by remember { mutableStateOf("") }
@@ -88,7 +88,7 @@ private fun SynexScreen() {
     var editorValue by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    val api = remember(token) { ApiClient(token.trim()) }
+    val api = remember { ApiClient(ctx) }
     val selected = servers.firstOrNull { it.id == selectedId }
 
     fun execute(action: suspend () -> Unit) {
@@ -204,16 +204,7 @@ private fun SynexScreen() {
         }
     ) { insets ->
         Column(Modifier.fillMaxSize().padding(insets).padding(horizontal = 16.dp)) {
-            if (!connected) {
-                ConnectionPanel(token, onToken = { token = it }, onConnect = {
-                    execute {
-                        require(token.trim().isNotBlank()) { "Introduce el token mostrado en Termux" }
-                        api.servers()
-                        prefs.edit().putString("token", token.trim()).apply()
-                        connected = true
-                    }
-                }, busy)
-            } else {
+            if (true) {
                 if (connectionError.isNotEmpty()) {
                     Text("Sin conexión: $connectionError", color = Warning, style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(bottom = 10.dp))
@@ -252,11 +243,7 @@ private fun SynexScreen() {
                         onRefresh = { filesRevision += 1 },
                         onUpload = { uploadLauncher.launch(arrayOf("*/*")) })
                 } else {
-                    SettingsPanel(connectedToken = token, onDisconnect = {
-                        connected = false
-                        servers = emptyList()
-                        selectedId = ""
-                    })
+                    SettingsPanel()
                 }
             }
         }
@@ -310,28 +297,6 @@ private fun SynexScreen() {
 private fun Panel(content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth().background(Surface, RoundedCornerShape(18.dp)).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
-}
-
-@Composable
-private fun ConnectionPanel(token: String, onToken: (String) -> Unit, onConnect: () -> Unit, busy: Boolean) {
-    Column(verticalArrangement = Arrangement.spacedBy(18.dp), modifier = Modifier.padding(top = 20.dp)) {
-        Text("Conecta el motor local", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("El proceso de Minecraft corre en Termux. Synex Host funciona como panel nativo para controlarlo desde Android.", color = Subtle)
-        Panel {
-            Text("PASO 1", color = Accent, fontWeight = FontWeight.Bold)
-            Text("En Termux, instala las dependencias y ejecuta ./start_backend.sh desde la carpeta SynexHost.")
-            HorizontalDivider(color = Border)
-            Text("PASO 2", color = Accent, fontWeight = FontWeight.Bold)
-            Text("Copia el TOKEN que aparece en Termux. La conexión siempre se hace a 127.0.0.1:8765.")
-            OutlinedTextField(token, onValueChange = onToken, modifier = Modifier.fillMaxWidth(),
-                label = { Text("Token de acceso") }, singleLine = true)
-            Button(onClick = onConnect, enabled = !busy && token.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Link, null); Spacer(Modifier.width(8.dp)); Text("Conectar")
-            }
-        }
-        Text("No requiere root. Termux debe permanecer activo para mantener el servidor y el panel disponibles.", color = Subtle,
-            style = MaterialTheme.typography.bodySmall)
-    }
 }
 
 @Composable
@@ -394,7 +359,7 @@ private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, 
                 Icon(Icons.Default.Folder, null); Spacer(Modifier.width(8.dp)); Text("Explorar archivos y plugins")
             }
         }
-        Text("El consumo de CPU, TPS y jugadores en tiempo real se añadirá en una siguiente versión; no mostramos cifras simuladas.",
+        Text("La app ejecuta Java directamente en Android. El rendimiento depende de la memoria y temperatura del teléfono.",
             color = Subtle, style = MaterialTheme.typography.bodySmall)
     }
 }
@@ -471,17 +436,16 @@ private fun FilesPanel(server: ServerInfo?, folder: String, files: List<FileEntr
 }
 
 @Composable
-private fun SettingsPanel(connectedToken: String, onDisconnect: () -> Unit) {
+private fun SettingsPanel() {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Ajustes", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Panel {
-            Text("Motor local", fontWeight = FontWeight.SemiBold)
-            Text("http://127.0.0.1:8765", color = Subtle, fontFamily = FontFamily.Monospace)
-            Text("Token configurado: ${if (connectedToken.isNotBlank()) "Sí" else "No"}", color = Subtle)
-            Text("El token permanece en las preferencias privadas de la app. No lo compartas.", style = MaterialTheme.typography.bodySmall)
+            Text("Motor integrado", fontWeight = FontWeight.SemiBold)
+            Text("Synex Host ejecuta Java y Minecraft dentro del teléfono, sin Termux, cuentas ni tokens.", color = Subtle)
+            Text("El primer uso prepara Java integrado. La descarga de Paper necesita Internet.", style = MaterialTheme.typography.bodySmall)
+            Text("Solo teléfonos Android ARM64. Los mundos están guardados en el espacio privado de la aplicación.", style = MaterialTheme.typography.bodySmall)
         }
-        OutlinedButton(onClick = onDisconnect, modifier = Modifier.fillMaxWidth()) { Text("Cambiar token o reconectar") }
-        Text("Synex Host v0.2 · Panel Android nativo / motor Termux", color = Subtle,
+        Text("Synex Host v0.3 · Hosting Android autónomo", color = Subtle,
             style = MaterialTheme.typography.labelSmall)
     }
 }
@@ -558,19 +522,19 @@ private fun CreateDialog(api: ApiClient, dismiss: () -> Unit, create: (String, S
                             label = { Text("${mb / 1024} GB") })
                     }
                 }
-                Text("RAM física del teléfono: aprox. ${memory / 1024f} GB. Reserva al menos 1.5 GB para Android y Termux.",
+                Text("RAM física del teléfono: aprox. ${memory / 1024f} GB. Reserva al menos 1.5 GB para Android y Java.",
                     style = MaterialTheme.typography.bodySmall, color = Subtle)
                 if (ram > suggestedMaxMb) Text(
-                    "Advertencia: asignar ${ram / 1024f} GB puede cerrar el servidor o incluso Termux por falta de memoria.",
+                    "Advertencia: asignar ${ram / 1024f} GB puede cerrar el servidor por falta de memoria.",
                     style = MaterialTheme.typography.bodySmall, color = Warning)
-                Text("Rango permitido: 512 MB–16 GB. Instalar requiere una build estable oficial; algunas versiones necesitan otra versión de Java.",
+                Text("Rango permitido: 512 MB–16 GB. Se descarga Paper estable y la app usa Java 17 o 21 integrado según la versión.",
                     color = Subtle, style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = {
             TextButton(onClick = { create(name, version, ram) },
                 enabled = name.isNotBlank() && Regex("""\d{1,2}\.\d{1,2}(\.\d{1,2})?""").matches(version)) {
-                Text("Crear")
+                Text("Crear e instalar")
             }
         },
         dismissButton = { TextButton(onClick = dismiss) { Text("Cancelar") } }
