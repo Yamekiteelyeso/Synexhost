@@ -487,7 +487,7 @@ private fun SettingsPanel() {
             Text("El primer uso prepara Java integrado. La descarga de Paper necesita Internet.", style = MaterialTheme.typography.bodySmall)
             Text("Solo teléfonos Android ARM64. Los mundos están guardados en el espacio privado de la aplicación.", style = MaterialTheme.typography.bodySmall)
         }
-        Text("Synex Host v0.4 · Hosting Android autónomo", color = Subtle,
+        Text("Synex Host v0.5 · Java integrado · Sin Termux", color = Subtle,
             style = MaterialTheme.typography.labelSmall)
     }
 }

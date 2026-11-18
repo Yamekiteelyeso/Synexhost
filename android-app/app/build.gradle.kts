@@ -11,10 +11,12 @@ android {
     defaultConfig {
         applicationId = "com.synex.host"
         minSdk = 26
-        targetSdk = 35
+        // Compatibility for exec() from private JRE: modern targetSdk denies this.
+        // Sideload-only; replace with JNI launcher for Play distribution.
+        targetSdk = 28
         ndk { abiFilters += "arm64-v8a" }
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.5.0"
     }
 
     buildFeatures {

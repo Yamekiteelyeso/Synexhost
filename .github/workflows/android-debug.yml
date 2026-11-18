@@ -38,8 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           assets="android-app/app/src/main/assets/runtimes"
-          libs="android-app/app/src/main/jniLibs/arm64-v8a"
-          mkdir -p "$assets" "$libs"
+          mkdir -p "$assets"
           for major in 17 21; do
             case "$major" in
               17) tag=download_jre17; sha=e162c860fe05ee4a4e4af7606437419879f6c748386a7b09fa77d10db6a64091 ;;
@@ -55,8 +54,7 @@ jobs:
             test -n "$javafile"
             root="$(dirname "$(dirname "$javafile")")"
             test -s "$root/lib/modules"
-            cp "$javafile" "$libs/libsynexjava$major.so"
-            chmod 755 "$libs/libsynexjava$major.so"
+            # Preserve bin/java in its JRE home rather than moving it.
             tar -cJf "$assets/jre$major.tar.xz" -C "$root" .
             echo "Packed Java $major: $(du -h "$assets/jre$major.tar.xz" | cut -f1)"
           done
@@ -80,6 +78,9 @@ jobs:
                           assert target != ".." and not target.startswith("../"), (name, entry.linkname)
                           links.append((name, target))
               assert {"lib/modules", "lib/libjli.so", "bin/java"} <= files, major
+              launcher = pathlib.Path("android-app/app/src/main/java/com/synex/host/EmbeddedRuntime.kt").read_text()
+              assert 'File(root, "bin/java")' in launcher
+              assert "Os.chmod(executable.absolutePath, 493)" in launcher
               assert len(links) >= 100, (major, len(links))
               assert ("legal/java.security.jgss/LICENSE", "legal/java.base/LICENSE") in links
               print(f"Java {major}: checked {len(files)} entries and {len(links)} safe links")
@@ -99,8 +100,6 @@ jobs:
           set -euo pipefail
           apk=android-app/app/build/outputs/apk/debug/app-debug.apk
           test -s "$apk"
-          unzip -l "$apk" | grep -E 'lib/arm64-v8a/libsynexjava17.so'
-          unzip -l "$apk" | grep -E 'lib/arm64-v8a/libsynexjava21.so'
           unzip -l "$apk" | grep -E 'assets/runtimes/jre17.tar.xz'
           unzip -l "$apk" | grep -E 'assets/runtimes/jre21.tar.xz'
       - name: Upload APK

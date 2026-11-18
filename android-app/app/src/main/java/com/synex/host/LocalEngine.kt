@@ -156,10 +156,12 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                     try {
                         val spec = spec(id)
                         val version = spec.getString("version")
-                        EmbeddedRuntime.prepare(ctx, version) { line ->
+                        val (runtime, java) = EmbeddedRuntime.prepare(ctx, version) { line ->
                             i.log(line)
                             i.step(line.removePrefix("[Synex] "))
                         }
+                        i.step("Comprobando Java integrado")
+                        EmbeddedRuntime.selfTest(ctx, runtime, java, i.dir) { i.log(it) }
                         i.step("Consultando builds de PaperMC")
                         downloadPaper(i, version)
                         i.step("Instalación completa", 100)
@@ -177,6 +179,7 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                 require(servers().first { it.id == id }.eulaAccepted) { "Acepta la EULA de Minecraft primero" }
                 val s = spec(id)
                 val (runtime, java) = EmbeddedRuntime.prepare(ctx, s.getString("version")) { i.log(it) }
+                i.log("[Synex] Java integrado: ${java.absolutePath}")
                 File(i.dir, "server.properties").let { props ->
                     if (!props.exists()) props.writeText("server-port=${s.getInt("port")}\nmax-players=10\nonline-mode=true\nmotd=Synex Host\n")
                 }

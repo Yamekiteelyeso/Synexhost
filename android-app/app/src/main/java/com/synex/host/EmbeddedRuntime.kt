@@ -11,7 +11,7 @@ import java.nio.file.Files
 import java.security.MessageDigest
 
 /** Android arm64 OpenJDK distributions are included as signed/pinned APK assets at build time.
- * The native launcher binaries reside in the APK nativeLibraryDir to respect Android 10+ W^X.
+ * Keep the launcher at JRE/bin/java so the JVM can resolve its own home directory.
  */
 internal object EmbeddedRuntime {
     fun majorFor(version: String): Int {
@@ -26,9 +26,9 @@ internal object EmbeddedRuntime {
         require(Build.SUPPORTED_ABIS.contains("arm64-v8a")) { "Synex Host autónomo requiere un teléfono ARM64" }
         val major = majorFor(version)
         val root = File(ctx.filesDir, "runtimes/jre$major")
-        val java = File(ctx.applicationInfo.nativeLibraryDir, "libsynexjava$major.so")
-        require(java.exists()) { "El APK no incluye el lanzador Java $major ARM64" }
-        if (!File(root, "lib/modules").isFile) {
+        val java = File(root, "bin/java")
+        if (!File(root, "lib/modules").isFile ||
+            !File(root, "lib/libjli.so").isFile || !java.isFile) {
             log("[Synex] Preparando Java $major integrado (primera ejecución)...")
             val staging = File(ctx.cacheDir, "synex-jre-$major-staging")
             staging.deleteRecursively()
@@ -72,7 +72,8 @@ internal object EmbeddedRuntime {
                         }
                     }
                 }
-                require(File(staging, "lib/modules").isFile && File(staging, "lib/libjli.so").isFile) {
+                require(File(staging, "lib/modules").isFile && File(staging, "lib/libjli.so").isFile &&
+                    File(staging, "bin/java").isFile) {
                     "Java $major incompleto en el APK"
                 }
                 root.parentFile?.mkdirs()
@@ -87,7 +88,39 @@ internal object EmbeddedRuntime {
                 throw error
             }
         }
+        // Restore +x permissions lost when unpacking the tar stream.
+        listOf(java, File(root, "lib/jspawnhelper")).filter { it.isFile }.forEach { executable ->
+            try { Os.chmod(executable.absolutePath, 493) } // 0755
+            catch (e: Exception) { throw IllegalStateException("No se pudo habilitar Java $major: ${e.message}", e) }
+        }
+        require(java.canExecute()) { "Java $major no tiene permiso de ejecución" }
         return root to java
+    }
+
+    /** Verify the JVM can start before downloading a Minecraft server. */
+    fun selfTest(ctx: Context, runtime: File, java: File, serverDir: File, log: (String) -> Unit) {
+        val process = try {
+            ProcessBuilder(java.absolutePath, "-version")
+                .directory(runtime)
+                .redirectErrorStream(true)
+                .also { it.environment().putAll(environment(ctx, runtime, serverDir)) }
+                .start()
+        } catch (e: Exception) {
+            throw IllegalStateException("No se puede iniciar Java en este Android: ${e.message}", e)
+        }
+        try {
+            if (!process.waitFor(25, java.util.concurrent.TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                throw IllegalStateException("Java no respondió durante 25 segundos")
+            }
+            val output = process.inputStream.bufferedReader().readText().take(1200).trim()
+            if (output.isNotBlank()) log("[Java] $output")
+            require(process.exitValue() == 0 && output.contains("version", ignoreCase = true)) {
+                "Java no inició correctamente (código ${process.exitValue()}): ${output.take(300)}"
+            }
+        } finally {
+            if (process.isAlive) process.destroyForcibly()
+        }
     }
 
     fun environment(ctx: Context, runtime: File, serverDir: File): Map<String, String> {
