@@ -95,6 +95,8 @@ private fun SynexScreen() {
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
     var renameValue by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<FileEntry?>(null) }
+    var worldDialog by remember { mutableStateOf(false) }
+    var editingWorld by remember { mutableStateOf(WorldOptions()) }
     var ramDialog by remember { mutableStateOf(false) }
     var updatedRam by remember { mutableIntStateOf(2048) }
     val scope = rememberCoroutineScope()
@@ -266,6 +268,10 @@ private fun SynexScreen() {
                         onEditRam = {
                             updatedRam = selected.ramMb
                             ramDialog = true
+                        },
+                        onEditWorld = {
+                            editingWorld = selected.world
+                            worldDialog = true
                         })
                 } else if (tab == 1) {
                     ConsolePanel(selected, logLines, consoleCommand, onCommand = { consoleCommand = it },
@@ -317,8 +323,8 @@ private fun SynexScreen() {
     if (createDialog) CreateDialog(
         api = api,
         dismiss = { createDialog = false },
-        create = { name, version, ram -> execute {
-            val obj = api.create(name, version, ram)
+        create = { name, version, ram, world -> execute {
+            val obj = api.create(name, version, ram, world)
             selectedId = obj.getString("id")
             createDialog = false
             snackbar.showSnackbar("Servidor creado")
@@ -334,6 +340,35 @@ private fun SynexScreen() {
                     execute { api.acceptEula(selected.id) }
                 }) { Text("Acepto la EULA") }
             }, dismissButton = { TextButton(onClick = { eulaDialog = false }) { Text("Cancelar") } })
+    }
+    if (worldDialog && selected != null) {
+        val currentServer = selected
+        AlertDialog(
+            onDismissRequest = { worldDialog = false },
+            title = { Text("Mundos · ${currentServer.name}") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    WorldFields(editingWorld, onChange = { editingWorld = it },
+                        worldGenerated = currentServer.worldGenerated)
+                    if (currentServer.worldGenerated) Text(
+                        "El mundo ya existe. El tipo y la semilla están bloqueados para proteger sus datos.",
+                        color = Warning, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { TextButton(onClick = {
+                val target = currentServer.id
+                val newWorld = editingWorld
+                worldDialog = false
+                execute {
+                    api.configureWorld(target, newWorld)
+                    snackbar.showSnackbar("Ajustes guardados; se aplican al iniciar Paper")
+                }
+            }, enabled = !busy && !currentServer.running && !currentServer.installing) {
+                Text("Guardar mundo")
+            } },
+            dismissButton = { TextButton(onClick = { worldDialog = false }) { Text("Cancelar") } }
+        )
     }
     if (ramDialog && selected != null) {
         AlertDialog(
@@ -490,7 +525,7 @@ private fun ServerPicker(servers: List<ServerInfo>, chosen: String, onSelect: (S
 private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, onStart: () -> Unit,
                       onStop: () -> Unit, onEula: () -> Unit, onConsole: () -> Unit, onFiles: () -> Unit,
                       onCopyDiagnostics: () -> Unit, onCopyAddress: () -> Unit, onBackup: () -> Unit,
-                      onEditRam: () -> Unit) {
+                      onEditRam: () -> Unit, onEditWorld: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Panel {
@@ -605,6 +640,31 @@ private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, 
             OutlinedButton(onClick = onEditRam, enabled = !server.running && !server.installing,
                 modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Tune, null); Spacer(Modifier.width(8.dp)); Text("Cambiar RAM del servidor")
+            }
+        }
+        Panel {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Public, null, tint = Accent, modifier = Modifier.size(24.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Generación de mundos", style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Stat("OVERWORLD", if (server.world.type == "minecraft:flat") "Plano" else "Normal",
+                    Modifier.weight(1f))
+                Stat("ESTADO", if (server.worldGenerated) "Creado" else "Sin crear",
+                    Modifier.weight(1f))
+            }
+            Text("Nether: ${if (server.world.nether) "Activado" else "Desactivado"}   ·   End: ${if (server.world.end) "Activado" else "Desactivado"}",
+                color = Subtle, style = MaterialTheme.typography.bodyMedium)
+            Text("Semilla: ${server.world.seed.ifEmpty { "Aleatoria" }} · Estructuras: ${if (server.world.structures) "Sí" else "No"}",
+                color = Subtle, style = MaterialTheme.typography.bodySmall)
+            Text("Paper genera el mundo y las dimensiones habilitadas al iniciar. Los chunks se crean conforme se necesitan.",
+                color = Subtle, style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = onEditWorld, enabled = !server.running && !server.installing,
+                modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Tune, null); Spacer(Modifier.width(8.dp))
+                Text("Configurar mundos")
             }
         }
         Text("La app ejecuta Java directamente en Android. El rendimiento depende de la memoria y temperatura del teléfono.",
@@ -724,13 +784,14 @@ private fun SettingsPanel() {
             Text("El primer uso prepara Java integrado. La descarga de Paper necesita Internet.", style = MaterialTheme.typography.bodySmall)
             Text("Solo teléfonos Android ARM64. Los mundos están guardados en el espacio privado de la aplicación.", style = MaterialTheme.typography.bodySmall)
         }
-        Text("Synex Host v0.8 · Compatibilidad Java ARM64 · Sin Termux", color = Subtle,
+        Text("Synex Host v0.9 · Mundos normales y planos · Sin Termux", color = Subtle,
             style = MaterialTheme.typography.labelSmall)
     }
 }
 
 @Composable
-private fun CreateDialog(api: ApiClient, dismiss: () -> Unit, create: (String, String, Int) -> Unit) {
+private fun CreateDialog(api: ApiClient, dismiss: () -> Unit,
+                         create: (String, String, Int, WorldOptions) -> Unit) {
     val context = LocalContext.current
     val memory = remember {
         val info = ActivityManager.MemoryInfo()
@@ -741,6 +802,7 @@ private fun CreateDialog(api: ApiClient, dismiss: () -> Unit, create: (String, S
     var name by remember { mutableStateOf("Nuevo servidor") }
     var version by remember { mutableStateOf("1.20.1") }
     var ram by remember { mutableIntStateOf(2048) }
+    var world by remember { mutableStateOf(WorldOptions()) }
     var versions by remember { mutableStateOf(listOf("1.20.1")) }
     var loading by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf("") }
@@ -806,16 +868,96 @@ private fun CreateDialog(api: ApiClient, dismiss: () -> Unit, create: (String, S
                 if (ram > suggestedMaxMb) Text(
                     "Advertencia: asignar ${ram / 1024f} GB puede cerrar el servidor por falta de memoria.",
                     style = MaterialTheme.typography.bodySmall, color = Warning)
-                Text("Rango permitido: 512 MB–16 GB. Se descarga Paper estable y la app usa Java 17 o 21 integrado según la versión.",
+                Text("Rango permitido: 512 MB–16 GB. Paper se descarga automáticamente.",
                     color = Subtle, style = MaterialTheme.typography.bodySmall)
+                HorizontalDivider(color = Border)
+                Text("Crear mundo", fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium)
+                WorldFields(world, onChange = { world = it }, worldGenerated = false)
             }
         },
         confirmButton = {
-            TextButton(onClick = { create(name, version, ram) },
+            TextButton(onClick = { create(name, version, ram, world) },
                 enabled = name.isNotBlank() && Regex("""\d{1,2}\.\d{1,2}(\.\d{1,2})?""").matches(version)) {
                 Text("Crear e instalar")
             }
         },
         dismissButton = { TextButton(onClick = dismiss) { Text("Cancelar") } }
     )
+}
+
+@Composable
+private fun WorldFields(world: WorldOptions, onChange: (WorldOptions) -> Unit,
+                        worldGenerated: Boolean) {
+    Text("Tipo de terreno", fontWeight = FontWeight.SemiBold)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = world.type == "minecraft:normal",
+            onClick = { onChange(world.copy(type = "minecraft:normal")) },
+            enabled = !worldGenerated,
+            label = { Text("Normal") },
+            leadingIcon = { Icon(Icons.Default.Terrain, null, modifier = Modifier.size(16.dp)) }
+        )
+        FilterChip(
+            selected = world.type == "minecraft:flat",
+            onClick = { onChange(world.copy(type = "minecraft:flat")) },
+            enabled = !worldGenerated,
+            label = { Text("Plano") },
+            leadingIcon = { Icon(Icons.Default.Layers, null, modifier = Modifier.size(16.dp)) }
+        )
+    }
+    OutlinedTextField(
+        value = world.seed,
+        onValueChange = { input ->
+            if (input.length <= 64 && input.matches(Regex("[a-zA-Z0-9_-]*"))) {
+                onChange(world.copy(seed = input))
+            }
+        },
+        enabled = !worldGenerated,
+        singleLine = true, modifier = Modifier.fillMaxWidth(),
+        label = { Text("Semilla (opcional)") },
+        placeholder = { Text("Vacío = aleatoria") }
+    )
+    Text("Dimensiones", fontWeight = FontWeight.SemiBold)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Generar Nether")
+            Text("Carga el mundo del Nether", color = Subtle,
+                style = MaterialTheme.typography.bodySmall)
+        }
+        Switch(checked = world.nether, onCheckedChange = { onChange(world.copy(nether = it)) })
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Generar End")
+            Text("Carga la dimensión del End", color = Subtle,
+                style = MaterialTheme.typography.bodySmall)
+        }
+        Switch(checked = world.end, onCheckedChange = { onChange(world.copy(end = it)) })
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Estructuras")
+            Text("Aldeas, templos y otras estructuras", color = Subtle,
+                style = MaterialTheme.typography.bodySmall)
+        }
+        Switch(checked = world.structures,
+            onCheckedChange = { onChange(world.copy(structures = it)) })
+    }
+    Text("Dificultad", fontWeight = FontWeight.SemiBold)
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf("peaceful" to "Pacífico", "easy" to "Fácil",
+            "normal" to "Normal", "hard" to "Difícil").forEach { (value, label) ->
+            FilterChip(selected = world.difficulty == value,
+                onClick = { onChange(world.copy(difficulty = value)) },
+                label = { Text(label) })
+        }
+    }
+    Text("Jugadores máximos: ${world.maxPlayers}", fontWeight = FontWeight.SemiBold)
+    Slider(value = world.maxPlayers.toFloat(),
+        onValueChange = { onChange(world.copy(maxPlayers = it.toInt().coerceIn(1, 100))) },
+        valueRange = 1f..100f, steps = 98)
+    Text("El mundo se crea al arrancar Paper por primera vez. No se pregenera un mapa infinito.",
+        color = Subtle, style = MaterialTheme.typography.bodySmall)
 }
