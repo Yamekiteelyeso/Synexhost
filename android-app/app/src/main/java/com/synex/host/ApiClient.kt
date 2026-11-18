@@ -26,7 +26,8 @@ class ApiClient(context: Context) {
 data class ServerInfo(
     val id: String, val name: String, val software: String, val version: String,
     val ramMb: Int, val port: Int, val installed: Boolean, val installing: Boolean,
-    val running: Boolean, val eulaAccepted: Boolean, val installError: String?
+    val running: Boolean, val eulaAccepted: Boolean, val installError: String?,
+    val installStep: String = "", val installProgress: Int = -1
 )
 
 data class FileEntry(val name: String, val path: String, val isDirectory: Boolean, val size: Long)

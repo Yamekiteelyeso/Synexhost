@@ -39,10 +39,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 
-private val Bg = Color(0xFF0D1016)
-private val Surface = Color(0xFF191D27)
-private val Border = Color(0xFF2C3241)
-private val Accent = Color(0xFF9198FF)
+private val Bg = Color(0xFF0C1015)
+private val Surface = Color(0xFF191E27)
+private val Border = Color(0xFF303744)
+private val Accent = Color(0xFF93A5FF)
 private val Subtle = Color(0xFFB5BBCB)
 private val Success = Color(0xFF62D4AA)
 private val Warning = Color(0xFFF6C177)
@@ -184,11 +184,11 @@ private fun SynexScreen() {
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             Column(Modifier.fillMaxWidth().background(Bg).padding(horizontal = 18.dp, vertical = 14.dp)) {
-                Text("SYNEX", color = Accent, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Text("SYNEX / LOCAL HOST", color = Accent, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Host", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold)
+                    Text("Mis servidores", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
                     Spacer(Modifier.weight(1f))
-                    Text("LOCAL · ANDROID", color = Subtle, style = MaterialTheme.typography.labelSmall)
+                    Icon(Icons.Default.Smartphone, contentDescription = null, tint = Subtle, modifier = Modifier.size(18.dp))
                 }
             }
         },
@@ -313,7 +313,8 @@ private fun ServerPicker(servers: List<ServerInfo>, chosen: String, onSelect: (S
 @Composable
 private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, onStart: () -> Unit,
                       onStop: () -> Unit, onEula: () -> Unit, onConsole: () -> Unit, onFiles: () -> Unit) {
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Panel {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Dns, null, tint = Accent, modifier = Modifier.size(30.dp))
@@ -322,21 +323,40 @@ private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, 
                     Text(server.name, fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleLarge)
                     Text("${server.software} · ${server.version}", color = Subtle)
                 }
-                Text(if (server.running) "ONLINE" else if (server.installing) "INSTALANDO" else "OFFLINE",
-                    color = if (server.running) Success else if (server.installing) Warning else Subtle,
-                    style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                Surface(shape = RoundedCornerShape(50), color = Bg) {
+                    Row(Modifier.padding(horizontal = 9.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Circle, contentDescription = null,
+                            tint = if (server.running) Success else if (server.installing) Warning else Subtle,
+                            modifier = Modifier.size(7.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text(if (server.running) "EN LÍNEA" else if (server.installing) "INSTALANDO" else "APAGADO",
+                            color = if (server.running) Success else if (server.installing) Warning else Subtle,
+                            style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
             HorizontalDivider(color = Border)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Stat("RAM MÁX.", "${server.ramMb / 1024f} GB", Modifier.weight(1f))
-                Stat("PUERTO", "${server.port}*", Modifier.weight(1f))
+                Stat("PUERTO LAN", "${server.port}", Modifier.weight(1f))
             }
-            Text("* Puerto inicial. Puede modificarse en server.properties.", color = Subtle, style = MaterialTheme.typography.labelSmall)
+            Text("IP de tu Wi-Fi  ·  Puerto editable en server.properties", color = Subtle, style = MaterialTheme.typography.labelSmall)
+            if (server.installing) {
+                Text(server.installStep.ifBlank { "Preparando servidor..." }, color = Subtle,
+                    style = MaterialTheme.typography.bodySmall)
+                if (server.installProgress in 0..100)
+                    LinearProgressIndicator(progress = { server.installProgress / 100f },
+                        modifier = Modifier.fillMaxWidth(), color = Accent, trackColor = Border)
+                else LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Accent, trackColor = Border)
+            }
             when {
-                !server.installed -> Button(onClick = onInstall, enabled = !busy && !server.installing,
+                server.installing -> Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+                    Text("Instalación en curso...")
+                }
+                !server.installed -> Button(onClick = onInstall, enabled = !busy,
                     modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.Download, null); Spacer(Modifier.width(8.dp))
-                    Text(if (server.installing) "Descargando Paper..." else "Instalar Paper ${server.version}")
+                    Text("Instalar Paper ${server.version}")
                 }
                 !server.eulaAccepted -> Button(onClick = onEula, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                     Text("Leer y aceptar EULA")
@@ -348,10 +368,32 @@ private fun Dashboard(server: ServerInfo, busy: Boolean, onInstall: () -> Unit, 
                     Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text("Iniciar servidor")
                 }
             }
-            server.installError?.let { Text("Error de instalación: $it", color = Warning) }
+            server.installError?.let { message ->
+                Surface(color = Color(0xFF30231F), shape = RoundedCornerShape(12.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.ErrorOutline, null, tint = Warning)
+                            Spacer(Modifier.width(8.dp))
+                            Text("No se pudo completar la operación", color = Warning,
+                                fontWeight = FontWeight.Bold)
+                        }
+                        Text(message, color = Color(0xFFFFD5B2),
+                            style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = onInstall,
+                                enabled = !busy && !server.installing && !server.running) {
+                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp)); Text("Reintentar")
+                            }
+                            TextButton(onClick = onConsole) { Text("Ver registros") }
+                        }
+                    }
+                }
+            }
         }
         Panel {
-            Text("Administración", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("Herramientas del servidor", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             OutlinedButton(onClick = onConsole, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Terminal, null); Spacer(Modifier.width(8.dp)); Text("Abrir consola")
             }
@@ -445,7 +487,7 @@ private fun SettingsPanel() {
             Text("El primer uso prepara Java integrado. La descarga de Paper necesita Internet.", style = MaterialTheme.typography.bodySmall)
             Text("Solo teléfonos Android ARM64. Los mundos están guardados en el espacio privado de la aplicación.", style = MaterialTheme.typography.bodySmall)
         }
-        Text("Synex Host v0.3 · Hosting Android autónomo", color = Subtle,
+        Text("Synex Host v0.4 · Hosting Android autónomo", color = Subtle,
             style = MaterialTheme.typography.labelSmall)
     }
 }

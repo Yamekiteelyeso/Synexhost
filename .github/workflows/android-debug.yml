@@ -60,6 +60,30 @@ jobs:
             tar -cJf "$assets/jre$major.tar.xz" -C "$root" .
             echo "Packed Java $major: $(du -h "$assets/jre$major.tar.xz" | cut -f1)"
           done
+      - name: Validate bundled Java archives and legal symlinks
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib, posixpath, tarfile
+          base = pathlib.Path("android-app/app/src/main/assets/runtimes")
+          for major in (17, 21):
+              archive = base / f"jre{major}.tar.xz"
+              files, links = set(), []
+              with tarfile.open(archive, "r:xz") as tar:
+                  for entry in tar:
+                      name = posixpath.normpath(entry.name.removeprefix("./"))
+                      assert not name.startswith("../") and not name.startswith("/"), name
+                      files.add(name)
+                      if entry.issym():
+                          assert not entry.linkname.startswith("/"), entry.linkname
+                          target = posixpath.normpath(posixpath.join(posixpath.dirname(name), entry.linkname))
+                          assert target != ".." and not target.startswith("../"), (name, entry.linkname)
+                          links.append((name, target))
+              assert {"lib/modules", "lib/libjli.so", "bin/java"} <= files, major
+              assert len(links) >= 100, (major, len(links))
+              assert ("legal/java.security.jgss/LICENSE", "legal/java.base/LICENSE") in links
+              print(f"Java {major}: checked {len(files)} entries and {len(links)} safe links")
+          PY
       - name: Backend tests (legacy compatibility)
         run: python3 -m unittest discover -s backend/tests -v
       - name: Gradle

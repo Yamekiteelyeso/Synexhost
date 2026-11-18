@@ -47,8 +47,17 @@ internal object EmbeddedRuntime {
                                         entry.isDirectory -> target.mkdirs()
                                         entry.isSymbolicLink -> {
                                             val link = entry.linkName
-                                            require(!link.startsWith('/') && link.split('/').none { it == ".." }) { "Enlace Java inseguro" }
+                                            // OpenJDK includes legitimate links such as
+                                            // legal/java.xml/LICENSE -> ../java.base/LICENSE.
+                                            // Reject escapes, not every relative '..' component.
+                                            val extractionRoot = staging.canonicalPath
+                                            val resolved = File(target.parentFile, link).canonicalPath
+                                            require(link.isNotBlank() && !link.startsWith('/') &&
+                                                (resolved == extractionRoot || resolved.startsWith(extractionRoot + File.separator))) {
+                                                "Enlace Java sale del directorio permitido"
+                                            }
                                             target.parentFile?.mkdirs()
+                                            if (java.nio.file.Files.isSymbolicLink(target.toPath())) target.delete()
                                             Os.symlink(link, target.absolutePath)
                                         }
                                         entry.isFile -> {
@@ -62,7 +71,9 @@ internal object EmbeddedRuntime {
                         }
                     }
                 }
-                require(File(staging, "lib/modules").isFile) { "Java $major incompleto en el APK" }
+                require(File(staging, "lib/modules").isFile && File(staging, "lib/libjli.so").isFile) {
+                    "Java $major incompleto en el APK"
+                }
                 root.parentFile?.mkdirs()
                 root.deleteRecursively()
                 if (!staging.renameTo(root)) {

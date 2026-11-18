@@ -1,4 +1,4 @@
-# Synex Host v0.3 — Android autónomo (prototipo)
+# Synex Host v0.4 — Android autónomo (corrección de instalación)
 
 **No requiere Termux, root, Python, tokens ni una computadora al instalar la APK.**
 
@@ -33,3 +33,10 @@ La aplicación Kotlin administra localmente los servidores en su almacenamiento 
 ## Desarrollo
 
 Para una APK: ejecuta el workflow **Android standalone APK** en GitHub Actions y descarga el artifact `SynexHost-standalone-debug-apk`. El código Python original permanece bajo `backend/` solo como referencia/pruebas de compatibilidad; **la APK ya no lo utiliza**.
+
+## Correcciones v0.4
+- Se reparó la extracción de enlaces simbólicos relativos que OpenJDK utiliza para sus archivos legales. Ya no se rechaza todo enlace con `..`; se valida la ruta resultante contra el directorio de extracción para bloquear escapes.
+- Indicador de etapa de instalación, porcentaje de descarga de Paper cuando el servidor publica Content-Length y opción de reintento/ver consola ante errores.
+- Validación CI de la estructura de OpenJDK 17/21 y enlaces legítimos, antes de compilar.
+- Descargas Paper restringidas a HTTPS y el host oficial, sin redirecciones automáticas.
+- **La compilación no demuestra por sí sola que Java/Paper arranquen en un teléfono real.** Se necesita probarlo en Android ARM64.

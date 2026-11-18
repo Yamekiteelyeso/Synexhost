@@ -33,6 +33,12 @@ internal class LocalEngine private constructor(private val ctx: Context) {
         @Volatile var process: Process? = null
         @Volatile var installing = false
         @Volatile var error: String? = null
+        @Volatile var installStep: String = ""
+        @Volatile var installProgress: Int = -1
+        fun step(message: String, percent: Int = -1) {
+            installStep = message
+            installProgress = percent
+        }
         private var seq = 0
         private val ring = ArrayDeque<Pair<Int, String>>()
         @Synchronized fun log(s: String) {
@@ -78,10 +84,10 @@ internal class LocalEngine private constructor(private val ctx: Context) {
         specList.map { s ->
             val i = instance(s.getString("id"))
             ServerInfo(s.getString("id"), s.getString("name"), "Paper", s.getString("version"),
-                s.getInt("ramMb"), s.getInt("port"), File(i.dir, "paper.jar").isFile,
+                s.getInt("ramMb"), s.getInt("port"), (File(i.dir, "paper.jar").length() > 100_000L),
                 i.installing, i.process?.isAlive == true,
                 File(i.dir, "eula.txt").takeIf { it.isFile }?.readText()?.lineSequence()?.any { it.trim() == "eula=true" } == true,
-                i.error)
+                i.error, i.installStep, i.installProgress)
         }
     }
 
@@ -145,14 +151,21 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                 require(!i.installing && i.process?.isAlive != true) { "Ya hay una operación en curso" }
                 i.installing = true
                 i.error = null
+                i.step("Preparando Java integrado")
                 thread(name = "synex-install-$id", isDaemon = true) {
                     try {
                         val spec = spec(id)
                         val version = spec.getString("version")
-                        EmbeddedRuntime.prepare(ctx, version) { i.log(it) }
+                        EmbeddedRuntime.prepare(ctx, version) { line ->
+                            i.log(line)
+                            i.step(line.removePrefix("[Synex] "))
+                        }
+                        i.step("Consultando builds de PaperMC")
                         downloadPaper(i, version)
+                        i.step("Instalación completa", 100)
                     } catch (e: Exception) {
                         i.error = e.message ?: "Falló la instalación"
+                        i.step("Instalación interrumpida")
                         i.log("[ERROR] ${i.error}")
                     } finally { i.installing = false }
                 }
@@ -172,17 +185,24 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                 val builder = ProcessBuilder(args).directory(i.dir).redirectErrorStream(true)
                 builder.environment().putAll(EmbeddedRuntime.environment(ctx, runtime, i.dir))
                 val proc = try { builder.start() } catch (e: Exception) {
-                    throw IllegalStateException("Error al iniciar Java integrado: ${e.message}", e)
+                    i.error = "No se pudo iniciar Java integrado: ${e.message}"
+                    i.log("[ERROR] ${i.error}")
+                    throw IllegalStateException(i.error, e)
                 }
+                i.error = null
                 i.process = proc
                 i.log("[Synex] Iniciando ${s.getString("version")} con Java ${EmbeddedRuntime.majorFor(s.getString("version"))}...")
-                ctx.startForegroundService(Intent(ctx, HostService::class.java))
+                runCatching {
+                    if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(Intent(ctx, HostService::class.java))
+                    else ctx.startService(Intent(ctx, HostService::class.java))
+                }.onFailure { i.log("[AVISO] Android no permitió fijar el servicio: ${it.message}") }
                 thread(name = "synex-console-$id", isDaemon = true) {
                     try { proc.inputStream.bufferedReader().useLines { lines ->
                         lines.forEach { i.log(it) }
                     } } catch (e: Exception) { i.log("[ERROR] Consola: ${e.message}") }
                     val exit = proc.waitFor()
                     i.log("[Synex] Servidor detenido (código $exit)")
+                    if (exit != 0) i.error = "Java/Paper terminó con código $exit. Revisa la consola."
                     if (instances.values.none { it.process?.isAlive == true }) {
                         ctx.stopService(Intent(ctx, HostService::class.java))
                     }
@@ -194,6 +214,7 @@ internal class LocalEngine private constructor(private val ctx: Context) {
     }
 
     private fun downloadPaper(i: Instance, version: String) {
+        i.step("Consultando la versión $version")
         val builds = urlJson("https://fill.papermc.io/v3/projects/paper/versions/$version/builds") as JSONArray
         var best: JSONObject? = null
         for (j in 0 until builds.length()) {
@@ -205,19 +226,26 @@ internal class LocalEngine private constructor(private val ctx: Context) {
         val build = best ?: error("No existe una build STABLE de Paper $version")
         val meta = build.getJSONObject("downloads").getJSONObject("server:default")
         val url = meta.getString("url")
-        require(url.startsWith("https://fill-data.papermc.io/")) { "URL de Paper no confiable" }
+        val downloadUri = java.net.URI(url)
+        require(downloadUri.scheme == "https" && downloadUri.host == "fill-data.papermc.io" && downloadUri.port == -1) {
+            "URL de Paper no confiable"
+        }
         val expected = meta.optJSONObject("checksums")?.optString("sha256") ?: ""
         require(expected.matches(Regex("[0-9a-fA-F]{64}"))) { "Paper no publicó SHA256 válido" }
         i.log("[Synex] Descargando Paper $version (build #${build.getInt("id")})...")
+        i.step("Descargando Paper $version", 0)
         val dest = File(i.dir, "paper.jar")
         val part = File(i.dir, "paper.jar.download")
         try {
             val conn = (URL(url).openConnection() as HttpURLConnection)
             conn.connectTimeout = 25000
             conn.readTimeout = 120000
+            conn.instanceFollowRedirects = false
             if (conn.responseCode !in 200..299) error("Descarga Paper HTTP ${conn.responseCode}")
             val digest = MessageDigest.getInstance("SHA-256")
             var count = 0L
+            val total = conn.contentLengthLong
+            var lastPercent = -1
             conn.inputStream.use { input ->
                 FileOutputStream(part).use { out ->
                     val bytes = ByteArray(128 * 1024)
@@ -228,13 +256,22 @@ internal class LocalEngine private constructor(private val ctx: Context) {
                         if (count > 150L * 1024L * 1024L) error("Paper supera tamaño permitido")
                         digest.update(bytes, 0, read)
                         out.write(bytes, 0, read)
+                        if (total > 0) {
+                            val percent = (count * 100L / total).toInt().coerceIn(0, 99)
+                            if (percent >= lastPercent + 4) {
+                                i.step("Descargando Paper $version", percent)
+                                lastPercent = percent
+                            }
+                        }
                     }
                 }
             }
             conn.disconnect()
+            i.step("Verificando descarga SHA-256", 99)
             val got = digest.digest().joinToString("") { "%02x".format(it) }
             require(count > 100_000L && got.equals(expected, ignoreCase = true)) { "Verificación SHA256 de Paper falló" }
             if (!part.renameTo(dest)) { part.copyTo(dest, overwrite = true); part.delete() }
+            File(i.dir, "plugins").mkdirs()
             i.log("[Synex] Paper instalado. Acepta EULA y pulsa Iniciar.")
         } finally { part.delete() }
     }
